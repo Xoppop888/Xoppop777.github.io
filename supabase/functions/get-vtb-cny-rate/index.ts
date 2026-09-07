@@ -1,11 +1,18 @@
 // Edge Function: get-vtb-cny-rate
 //
-// Gemini + Google Search grounding ищет актуальный курс CNY/RUB банка ВТБ.
-// Приоритет: КУРС ПРОДАЖИ юаня банком, т.к. клиент покупает CNY для оплаты автомобиля.
+// FREE Gemini-compatible VTB rate flow:
+// 1) Gemini URL Context retrieves the official public VTB CNY page.
+// 2) Gemini reads that page and extracts the current CNY/RUB SELL rate.
 //
-// Secrets (только Supabase, НИКОГДА не VITE_*):
-//   supabase secrets set GEMINI_API_KEY=...
-//   supabase secrets set GEMINI_VTB_MODEL=gemini-3.8-flash   # optional
+// This deliberately does NOT use Google Search grounding. URL Context is free on
+// the Gemini API Free Tier and can retrieve a URL supplied explicitly by us.
+// Gemini itself remains the only AI provider.
+//
+// Secrets (Supabase only):
+//   GEMINI_API_KEY=...
+//   GEMINI_VTB_MODEL=gemini-3.7-flash (optional)
+//
+// Deploy:
 //   supabase functions deploy get-vtb-cny-rate
 
 import { corsHeaders, jsonResponse, supabaseAdmin, requireUser, isRateLimited } from "../_shared/http.ts";
@@ -13,6 +20,7 @@ import { corsHeaders, jsonResponse, supabaseAdmin, requireUser, isRateLimited } 
 const CACHE_MINUTES = 10;
 const RATE_LIMIT = 3;
 const RATE_LIMIT_WINDOW_MIN = 10;
+const VTB_URL = "https://www.vtb.ru/personal/platezhi-i-perevody/obmen-valjuty/yuan/";
 
 interface GeminiRateAnswer {
   rate: number | null;
@@ -69,7 +77,7 @@ Deno.serve(async (req) => {
 
     const sb = supabaseAdmin();
 
-    // 0. Cache — Gemini/Search не вызывается чаще раза в 10 минут.
+    // Cache — do not call VTB/Gemini more often than every 10 minutes.
     const cacheSince = new Date(Date.now() - CACHE_MINUTES * 60_000).toISOString();
     const { data: cached } = await sb
       .from("exchange_rates")
@@ -86,7 +94,10 @@ Deno.serve(async (req) => {
         rate: String(cached.rate),
         source: "VTB",
         fetched_at: cached.fetched_at,
-        note: "Курс ВТБ (кэш, Gemini + Google Search обновляется не чаще раза в 10 минут)",
+        note: "Курс ВТБ (кэш; бесплатный Gemini-парсер обновляется не чаще 1 раза в 10 минут)",
+        source_url: VTB_URL,
+        gemini_used: false,
+        cache: true,
       });
     }
 
@@ -99,35 +110,46 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "GEMINI_API_KEY не настроен. Настройте Gemini в Supabase Secrets." }, 503);
     }
 
-    const model = Deno.env.get("GEMINI_VTB_MODEL") ?? "gemini-3.8-flash";
+    // Gemini URL Context directly retrieves the official VTB page.
+    // URL Context is free on the Gemini API Free Tier and does not require
+    // Google Search grounding. It is a better fit than scraping the VTB HTML
+    // ourselves because the visible rate can be loaded dynamically.
+
+    const model = Deno.env.get("GEMINI_VTB_MODEL") ?? "gemini-3.7-flash";
     const today = new Date().toISOString().slice(0, 10);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
-    // Gemini сам выполняет Google Search и возвращает groundingMetadata.
-    // Это принципиально лучше старой схемы, где backend просто скачивал HTML ВТБ,
-    // потому что актуальный курс может находиться в динамически загружаемых данных.
-    const prompt = `Ты — финансовый агент. Сегодня ${today}.
-Найди АКТУАЛЬНЫЙ курс китайского юаня CNY к российскому рублю RUB именно банка ВТБ.
+    const prompt = `Ты извлекаешь банковский курс из официальной страницы ВТБ.
+Сегодня: ${today}.
 
-ОБЯЗАТЕЛЬНО используй Google Search и ищи свежие данные в интернете.
-Приоритет источника — официальный сайт ВТБ (vtb.ru) и его страницы/котировки.
-Не используй курс ЦБ РФ вместо курса ВТБ.
+Источник данных — ТОЛЬКО официальная публичная страница ВТБ:
+${VTB_URL}
 
-Для расчёта оплаты автомобиля клиент ПОКУПАЕТ юани у банка, поэтому нужен курс ПРОДАЖИ CNY банком ВТБ (sell / "продажа").
-Если официальный источник ВТБ показывает несколько значений или разные направления, выбери именно продажу CNY за RUB.
-Если на официальном сайте ВТБ курс не удалось подтвердить, ищи свежие страницы/публикации, явно указывающие курс ВТБ, и понизь confidence.
-Не выдумывай число. Если актуальный курс ВТБ не найден или источник нельзя подтвердить — rate должен быть null.
+Ниже приведено содержимое страницы ВТБ. Твоя задача — найти АКТУАЛЬНЫЙ курс CNY/RUB.
+Для калькулятора автомобиля клиент ПОКУПАЕТ юани за рубли, поэтому нужен именно курс ПРОДАЖИ CNY банком ВТБ.
 
-Верни ТОЛЬКО JSON:
+Правила:
+1. Не придумывай курс.
+2. Не используй курс ЦБ РФ как замену курсу ВТБ.
+3. Если на странице есть покупка и продажа — выбери ПРОДАЖУ.
+4. Если курс указан за 10 или 100 CNY, пересчитай в рубли за 1 CNY.
+5. Если на переданных данных нет подтверждаемого актуального курса ВТБ — верни rate=null.
+6. Не используй внешние сайты и не выполняй поиск: анализируй только переданные данные страницы ВТБ.
+7. Верни только JSON.
+
+Формат:
 {
   "rate": число или null,
   "direction": "sell" | "buy" | "mid" | null,
   "date": "YYYY-MM-DD" | null,
   "confidence": число от 0 до 1,
-  "source_note": "краткое описание найденного источника"
+  "source_note": "краткое описание того, где найден курс"
 }
 
-Важно: rate — это РУБЛЕЙ ЗА 1 CNY, а не за 10/100 юаней. Если источник показывает курс за 10 или 100 CNY, пересчитай на 1 CNY.`;
+Официальная страница ВТБ, которую Gemini должен открыть через URL Context:
+${VTB_URL}
+
+Не используй другие сайты и не используй Google Search grounding.`;
 
     const ai = await fetch(url, {
       method: "POST",
@@ -137,9 +159,8 @@ Deno.serve(async (req) => {
       },
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
+        tools: [{ url_context: {} }],
         generationConfig: {
-          temperature: 0,
           responseMimeType: "application/json",
           responseSchema: {
             type: "object",
@@ -159,9 +180,10 @@ Deno.serve(async (req) => {
     const raw = await ai.text();
     if (!ai.ok) {
       return jsonResponse({
-        error: "Gemini не смог выполнить поиск курса ВТБ.",
+        error: "Gemini не смог обработать данные ВТБ.",
         code: "GEMINI_VTB_API_ERROR",
         detail: raw.slice(0, 1500),
+        source_url: VTB_URL,
       }, 502);
     }
 
@@ -178,20 +200,22 @@ Deno.serve(async (req) => {
       return jsonResponse({
         error: "Gemini не вернул структурированный курс ВТБ.",
         code: "GEMINI_INVALID_JSON",
-        raw: content.slice(0, 1200),
       }, 502);
     }
 
     const rate = Number(answer.rate);
     if (answer.rate == null || !Number.isFinite(rate) || rate <= 0) {
       return jsonResponse({
-        error: "Gemini не смог подтвердить актуальный курс ВТБ. Введите курс вручную или повторите попытку.",
+        error: "На официальной странице ВТБ не найден подтверждаемый курс продажи CNY. Введите курс вручную или повторите попытку позже.",
         code: "VTB_RATE_NOT_FOUND",
         note: answer.source_note,
+        source_url: VTB_URL,
+        gemini_model: model,
+        gemini_used: true,
       }, 502);
     }
 
-    // Защита от ошибок масштаба (10/100 CNY) и галлюцинаций.
+    // Sanity check against CBR only as a guard against 10/100-CNY scaling or hallucination.
     const cbr = await fetchCbrCny();
     if (cbr && Math.abs(rate - cbr) / cbr > 0.15) {
       return jsonResponse({
@@ -200,6 +224,7 @@ Deno.serve(async (req) => {
         gemini_rate: rate,
         cbr_rate: cbr,
         note: answer.source_note,
+        source_url: VTB_URL,
       }, 502);
     }
 
@@ -212,29 +237,24 @@ Deno.serve(async (req) => {
       is_manual: false,
     });
 
-    const grounding = response?.candidates?.[0]?.groundingMetadata;
-    const searchQueries = grounding?.webSearchQueries ?? [];
-    const webSources = (grounding?.groundingChunks ?? [])
-      .map((chunk: any) => chunk?.web)
-      .filter((web: any) => web?.uri)
-      .slice(0, 5)
-      .map((web: any) => ({ title: web.title ?? "Источник", uri: web.uri }));
-
     return jsonResponse({
       rate: String(rate),
       source: "VTB",
       fetched_at,
-      note: `Gemini + Google Search: ${answer.source_note} (${answer.direction ?? "unknown"}, уверенность ${(Math.max(0, Math.min(1, Number(answer.confidence) || 0)) * 100).toFixed(0)}%)`,
+      note: `ВТБ → Gemini (${answer.direction ?? "unknown"}, уверенность ${(Math.max(0, Math.min(1, Number(answer.confidence) || 0)) * 100).toFixed(0)}%): ${answer.source_note}`,
+      source_url: VTB_URL,
       cbr_rate: cbr,
       gemini_model: model,
-      search_queries: searchQueries,
-      web_sources: webSources,
+      gemini_used: true,
+      cache: false,
+      search_grounding: false,
     });
   } catch (e) {
     return jsonResponse({
-      error: "Не удалось получить курс ВТБ через Gemini. Введите курс вручную или повторите попытку.",
+      error: "Не удалось получить курс ВТБ. Введите курс вручную или повторите попытку.",
       code: "VTB_GEMINI_UNEXPECTED_ERROR",
       detail: String(e),
+      source_url: VTB_URL,
     }, 500);
   }
 });

@@ -5,7 +5,7 @@
 // Required secrets:
 //   GEMINI_API_KEY=...
 // Optional:
-//   GEMINI_MODEL=gemini-3.8-flash
+//   GEMINI_MODEL=gemini-3.7-flash
 //
 // Deploy:
 //   supabase functions deploy analyze-car-plate --project-ref <PROJECT_REF>
@@ -14,7 +14,7 @@ import { corsHeaders, jsonResponse, readJson, requireUser, isRateLimited } from 
 
 const RATE_LIMIT = 10;
 const RATE_LIMIT_WINDOW_MIN = 10;
-const DEFAULT_MODEL = "gemini-3.8-flash";
+const DEFAULT_MODEL = "gemini-3.7-flash";
 const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 
 interface OcrResponse {
@@ -182,7 +182,6 @@ Deno.serve(async (req) => {
           ],
         }],
         generationConfig: {
-          temperature: 0.1,
           responseMimeType: "application/json",
           responseSchema,
         },

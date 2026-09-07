@@ -58,8 +58,8 @@ npm run build      # production-сборка
 5. Секреты — **только в Supabase Secrets, никогда в frontend**:
    ```bash
    supabase secrets set GEMINI_API_KEY=... # Google Gemini API key для всех AI-функций
-   supabase secrets set GEMINI_MODEL=gemini-3.8-flash
-   supabase secrets set GEMINI_VTB_MODEL=gemini-3.8-flash
+   supabase secrets set GEMINI_MODEL=gemini-3.7-flash
+   supabase secrets set GEMINI_VTB_MODEL=gemini-3.7-flash
    supabase secrets set CBR_API_URL=...   # (опц.) официальный XML ЦБ РФ
    ```
 6. Переменные окружения frontend (`.env`, не секретные):
@@ -100,7 +100,7 @@ supabase/
 - **Версионирование.** Каждый расчет сохраняет snapshot: курсы с источниками и timestamp,
   все примененные тарифы с формулами, версию правил (`calculation_rule_versions`).
   Обновление тарифов **не пересчитывает** старые расчеты.
-- **Курсы.** У ВТБ нет публичного API, поэтому `get-vtb-cny-rate` использует **Gemini + Google Search grounding**: Gemini сам ищет
+- **Курсы.** У ВТБ нет публичного API, поэтому `get-vtb-cny-rate` использует **Gemini + получение официальной страницы ВТБ через Gemini URL Context без Google Search grounding**: Gemini сам ищет
   актуальные данные в интернете, приоритетно на `vtb.ru`, и извлекает курс CNY/RUB (приоритет — курс продажи юаня),
   затем backend валидирует результат по официальному курсу ЦБ РФ (тот же XML-источник, что и `get-cbr-eur-rate`;
   отклонение более ±15% отклоняется). EUR — официальный курс ЦБ РФ (`get-cbr-eur-rate`), история в `exchange_rates`.
@@ -149,3 +149,7 @@ supabase/
 
 Расчет является предварительным и не является официальным таможенным расчетом. Итоговые платежи зависят
 от документов, таможенной стоимости, характеристик автомобиля и действующего законодательства.
+
+
+### Бесплатный курс ВТБ
+Gemini URL Context получает официальную страницу ВТБ, затем Gemini извлекает курс продажи CNY. Google Search grounding не используется; URL Context доступен в бесплатном Gemini API.

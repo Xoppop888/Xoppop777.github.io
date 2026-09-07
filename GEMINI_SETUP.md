@@ -12,8 +12,8 @@ From the project root:
 supabase login
 supabase link --project-ref YOUR_PROJECT_REF
 supabase secrets set GEMINI_API_KEY=YOUR_GEMINI_API_KEY
-supabase secrets set GEMINI_MODEL=gemini-3.8-flash
-supabase secrets set GEMINI_VTB_MODEL=gemini-3.8-flash
+supabase secrets set GEMINI_MODEL=gemini-3.7-flash
+supabase secrets set GEMINI_VTB_MODEL=gemini-3.7-flash
 ```
 
 Do NOT put `GEMINI_API_KEY` into GitHub repository variables or any `VITE_*` variable. It must never reach the browser.
@@ -57,3 +57,8 @@ The Edge Function logs provider errors without exposing the API key.
 ### Поиск курса ВТБ через Gemini
 
 `get-vtb-cny-rate` использует тот же `GEMINI_API_KEY`, но отдельную переменную `GEMINI_VTB_MODEL`. Gemini вызывается с инструментом Google Search и должен искать свежий курс CNY/RUB именно ВТБ, приоритетно на `vtb.ru`. Курс продажи CNY используется для расчета покупки юаней.
+
+
+## Бесплатный режим курса ВТБ
+
+Для бесплатного Gemini API функция `get-vtb-cny-rate` **не использует Google Search grounding**. Backend бесплатно получает официальную публичную страницу ВТБ, после чего Gemini извлекает из неё курс продажи CNY. Это сохраняет Gemini как AI-провайдера и не требует платного Search grounding. Официальная страница ВТБ: https://www.vtb.ru/personal/platezhi-i-perevody/obmen-valjuty/yuan/
