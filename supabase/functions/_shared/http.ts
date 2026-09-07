@@ -28,8 +28,8 @@ export const supabaseAdmin = () =>
 /**
  * Проверяет Authorization: Bearer <access_token> запроса и возвращает id пользователя.
  * Anon key НЕ проходит эту проверку (у него нет "sub") — то есть требует реального логина.
- * Используется в функциях, которые дергают платный AI (get-vtb-cny-rate, analyze-car-plate),
- * чтобы анонимный трафик не мог жечь бюджет AI_API_KEY.
+ * Используется в функциях, которые дергают платный Gemini (get-vtb-cny-rate, analyze-car-plate),
+ * чтобы анонимный трафик не мог жечь бюджет GEMINI_API_KEY.
  */
 export const requireUser = async (req: Request): Promise<{ id: string } | null> => {
   const auth = req.headers.get("Authorization") ?? "";

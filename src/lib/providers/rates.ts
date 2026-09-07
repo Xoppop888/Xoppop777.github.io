@@ -69,7 +69,7 @@ export class EdgeRateProvider implements RateProvider {
 export class DevRateProvider implements RateProvider {
   async fetchCnyRate(): Promise<RateResult> {
     if (env.VITE_EDGE_URL) return new EdgeRateProvider().fetchCnyRate();
-    throw new Error("Курс ВТБ ищет LLM-агент на backend (Edge Function get-vtb-cny-rate). В dev-режиме backend не подключен — введите курс вручную.");
+    throw new Error("Курс ВТБ ищет Gemini на backend (Edge Function get-vtb-cny-rate). В dev-режиме backend не подключен — введите курс вручную.");
   }
 
   async fetchEurRate(): Promise<RateResult> {

@@ -7,7 +7,7 @@ const env = ((import.meta as unknown as { env?: Record<string, string> }).env) |
 /**
  * CarRecognitionProvider — abstraction layer над OCR/AI.
  * AI-провайдер подключается ТОЛЬКО через backend (Edge Function analyze-car-plate),
- * секретные ключи (AI_API_KEY) хранятся в Supabase Secrets.
+ * секретный ключ GEMINI_API_KEY хранится в Supabase Secrets.
  * Замена провайдера не требует изменений frontend.
  */
 export interface CarRecognitionProvider {

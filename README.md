@@ -10,17 +10,6 @@
 - **Финансовые расчеты:** `decimal.js` (никакого floating point) + PostgreSQL `NUMERIC`
 - **Backend:** Supabase (PostgreSQL, Auth, Storage, RLS) + Supabase Edge Functions (Deno)
 
-## Публикация на GitHub Pages
-
-Проект уже содержит GitHub Actions workflow: `.github/workflows/deploy-pages.yml`. Важно:
-
-1. Репозиторий должен содержать этот workflow и быть запушен в ветку `main` или `master`.
-2. В GitHub откройте **Settings → Pages → Build and deployment → Source → GitHub Actions**.
-3. Для Supabase добавьте `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` и `VITE_EDGE_URL` в **Settings → Secrets and variables → Actions**. Без них приложение работает в локальном/demo-режиме.
-4. Vite настроен с относительным `base: "./"`, поэтому сборка корректно работает и для `username.github.io`, и для `username.github.io/repository`.
-
-После push откройте вкладку **Actions** и убедитесь, что workflow `Deploy to GitHub Pages` завершился успешно.
-
 ## Быстрый старт (локально)
 
 ```bash
@@ -68,12 +57,10 @@ npm run build      # production-сборка
    ```
 5. Секреты — **только в Supabase Secrets, никогда в frontend**:
    ```bash
-   supabase secrets set AI_API_KEY=...    # ключ LLM-провайдера (OCR шильдиков + поиск курса ВТБ)
-   supabase secrets set AI_API_URL=...    # (опц.) OpenAI-совместимый endpoint
-   supabase secrets set AI_MODEL=...      # (опц.) модель, по умолчанию gpt-4o-mini / gpt-4o
-   supabase secrets set VTB_RATES_URL=... # (опц.) страница котировок ВТБ, по умолчанию https://www.vtb.ru/personal/kotirovki
-   supabase secrets set VTB_RATES_URL_2=...# (опц.) резервный источник курса
-   supabase secrets set CBR_API_URL=...   # (опц.) по умолчанию https://www.cbr.ru/scripts/XML_daily.asp
+   supabase secrets set GEMINI_API_KEY=... # Google Gemini API key для всех AI-функций
+   supabase secrets set GEMINI_MODEL=gemini-3.8-flash
+   supabase secrets set GEMINI_VTB_MODEL=gemini-3.8-flash
+   supabase secrets set CBR_API_URL=...   # (опц.) официальный XML ЦБ РФ
    ```
 6. Переменные окружения frontend (`.env`, не секретные):
    ```
@@ -113,13 +100,13 @@ supabase/
 - **Версионирование.** Каждый расчет сохраняет snapshot: курсы с источниками и timestamp,
   все примененные тарифы с формулами, версию правил (`calculation_rule_versions`).
   Обновление тарифов **не пересчитывает** старые расчеты.
-- **Курсы.** У ВТБ нет публичного API, поэтому `get-vtb-cny-rate` использует **LLM-агента**: backend скачивает
-  страницу котировок ВТБ (и доп. источники), LLM извлекает курс CNY/RUB (приоритет — курс продажи юаня),
+- **Курсы.** У ВТБ нет публичного API, поэтому `get-vtb-cny-rate` использует **Gemini + Google Search grounding**: Gemini сам ищет
+  актуальные данные в интернете, приоритетно на `vtb.ru`, и извлекает курс CNY/RUB (приоритет — курс продажи юаня),
   затем backend валидирует результат по официальному курсу ЦБ РФ (тот же XML-источник, что и `get-cbr-eur-rate`;
   отклонение более ±15% отклоняется). EUR — официальный курс ЦБ РФ (`get-cbr-eur-rate`), история в `exchange_rates`.
   Источник недоступен → явная ошибка + ручной ввод (источник `Manual`) или демо-курс (источник `Demo`, плашка DEMO DATA).
   Устаревший курс никогда не используется молча. Обе функции требуют авторизации и кэшируют результат ВТБ на
-  10 минут, чтобы не дергать LLM на каждый чих; сверх лимита (3 запроса ВТБ / 10 распознаваний шильдика за
+  10 минут, чтобы не дергать Gemini на каждый чих; сверх лимита (3 запроса ВТБ / 10 распознаваний шильдика за
   10 минут на пользователя) возвращается 429.
 - **Расчет и сохранение — на клиенте.** `computeFullCalculation`/`calculateCustoms` выполняются в браузере
   (`src/lib/engine`), а `saveCalculation` пишет снапшот напрямую через `supabase-js` с anon key — RLS сама
@@ -131,7 +118,7 @@ supabase/
   (доставка по Китаю, расходы) конвертируются по курсу ВТБ без надбавки. Таможенная стоимость —
   инвойс по курсу ВТБ без надбавки. Расчетный курс инвойса справочно: `ВТБ × 1,025`.
 - **RLS.** Пользователь видит только свои расчеты; тарифы, курсы и настройки на запись — только администратору.
-- **AI через backend.** `CarRecognitionProvider` — abstraction layer; провайдер меняется без правок frontend.
+- **Gemini через backend.** `CarRecognitionProvider` — abstraction layer; провайдер меняется без правок frontend.
   OCR с `confidence < 0.7` подсвечивается: «Проверьте значение».
 
 ## Важно про ставки
