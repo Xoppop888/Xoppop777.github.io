@@ -3,7 +3,10 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
-  base: "/Xoppop777.github.io/",
+  // Relative asset paths make the build work both for a GitHub user site
+  // (username.github.io) and for a project site (username.github.io/repository).
+  // HashRouter is used, so the app does not need server-side route rewrites.
+  base: "./",
   plugins: [react(), tailwindcss()],
   server: {
     host: "0.0.0.0",

@@ -10,6 +10,17 @@
 - **Финансовые расчеты:** `decimal.js` (никакого floating point) + PostgreSQL `NUMERIC`
 - **Backend:** Supabase (PostgreSQL, Auth, Storage, RLS) + Supabase Edge Functions (Deno)
 
+## Публикация на GitHub Pages
+
+Проект уже содержит GitHub Actions workflow: `.github/workflows/deploy-pages.yml`. Важно:
+
+1. Репозиторий должен содержать этот workflow и быть запушен в ветку `main` или `master`.
+2. В GitHub откройте **Settings → Pages → Build and deployment → Source → GitHub Actions**.
+3. Для Supabase добавьте `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` и `VITE_EDGE_URL` в **Settings → Secrets and variables → Actions**. Без них приложение работает в локальном/demo-режиме.
+4. Vite настроен с относительным `base: "./"`, поэтому сборка корректно работает и для `username.github.io`, и для `username.github.io/repository`.
+
+После push откройте вкладку **Actions** и убедитесь, что workflow `Deploy to GitHub Pages` завершился успешно.
+
 ## Быстрый старт (локально)
 
 ```bash
