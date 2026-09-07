@@ -13,6 +13,7 @@ interface AppState {
   refreshUser: () => Promise<void>;
   refreshRules: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<AppUser>;
+  signUp: (email: string, password: string, name: string) => Promise<{ user: AppUser | null; needsEmailConfirm: boolean }>;
   signOut: () => Promise<void>;
 }
 
@@ -26,6 +27,7 @@ const Ctx = createContext<AppState>({
   refreshUser: async () => {},
   refreshRules: async () => {},
   signIn: async () => ({ id: "", email: "", name: "", role: "user", created_at: "" }),
+  signUp: async () => ({ user: null, needsEmailConfirm: false }),
   signOut: async () => {},
 });
 
@@ -70,6 +72,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return u;
   }, []);
 
+  const signUp = useCallback(async (email: string, password: string, name: string) => {
+    const res = await db.signUp(email, password, name);
+    if (res.user) setUser(res.user);
+    return res;
+  }, []);
+
   const signOut = useCallback(async () => {
     await db.signOut();
     setUser(null);
@@ -87,6 +95,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         refreshUser,
         refreshRules,
         signIn,
+        signUp,
         signOut,
       }}
     >

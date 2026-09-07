@@ -40,6 +40,7 @@ export interface DbAdapter {
   // auth
   currentUser(): Promise<AppUser | null>;
   signIn(email: string, password: string): Promise<AppUser>;
+  signUp(email: string, password: string, name: string): Promise<{ user: AppUser | null; needsEmailConfirm: boolean }>;
   signOut(): Promise<void>;
   // admin
   adminStats(): Promise<AdminStats>;
@@ -196,6 +197,24 @@ class LocalAdapter implements DbAdapter {
     const { password: _pw, ...pub } = u;
     return pub;
   }
+  async signUp(email: string, password: string, name: string): Promise<{ user: AppUser | null; needsEmailConfirm: boolean }> {
+    const users = read<LocalUserRow[]>(LS.users, []);
+    const normalized = email.trim().toLowerCase();
+    if (users.find((x) => x.email === normalized)) throw new Error("Аккаунт с таким email уже существует");
+    const u: LocalUserRow = {
+      id: uid(),
+      email: normalized,
+      name: name.trim() || normalized.split("@")[0],
+      role: normalized === "admin@autochina.ru" ? "admin" : "user",
+      created_at: new Date().toISOString(),
+      password,
+    };
+    users.push(u);
+    write(LS.users, users);
+    write(LS.session, u.id);
+    const { password: _pw, ...pub } = u;
+    return { user: pub, needsEmailConfirm: false };
+  }
   async signOut() {
     write(LS.session, null);
   }
@@ -347,6 +366,19 @@ class SupabaseAdapter implements DbAdapter {
     const res = await this.sb.auth.signInWithPassword({ email, password });
     if (res.error) throw new Error(res.error.message);
     return (await this.currentUser())!;
+  }
+  async signUp(email: string, password: string, name: string): Promise<{ user: AppUser | null; needsEmailConfirm: boolean }> {
+    const res = await this.sb.auth.signUp({
+      email,
+      password,
+      options: { data: { full_name: name.trim() } },
+    });
+    if (res.error) throw new Error(res.error.message);
+    // Если в проекте включено подтверждение email, Supabase не выдаёт сессию сразу —
+    // res.data.session будет null, а res.data.user уже создан (но неактивен до подтверждения).
+    const needsEmailConfirm = !res.data.session;
+    const user = needsEmailConfirm ? null : await this.currentUser();
+    return { user, needsEmailConfirm };
   }
   async signOut() {
     await this.sb.auth.signOut();
