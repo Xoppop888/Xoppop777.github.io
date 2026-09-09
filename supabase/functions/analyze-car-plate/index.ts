@@ -33,6 +33,8 @@ interface OcrResponse {
   confidence: Record<string, number>;
 }
 
+// Не отправляется в Gemini API (responseSchema несовместим с tools/google_search) —
+// оставлено как документация ожидаемой формы ответа для normalizeModelOutput().
 const responseSchema = {
   type: "object",
   properties: {
@@ -132,6 +134,20 @@ function normalizeModelOutput(value: any): OcrResponse {
   };
 }
 
+function extractJsonFromText(text: string): unknown | null {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -165,16 +181,25 @@ Deno.serve(async (req) => {
 
 Правила:
 - Не придумывай VIN, год, объем, мощность или модель.
-- Поле "model" — это МАРКЕТИНГОВОЕ название модели автомобиля (например "Camry", "Corolla", "RAV4"), а НЕ технический код кузова/двигателя/платформы и НЕ название какой-либо AI-системы или языковой модели. Если название модели явно не написано на шильдике и не считывается однозначно из VIN, верни пустую строку "" — категорически не подставляй ничего похожего на "gemini", "gpt", версию модели ИИ или другой технический код вместо названия автомобиля.
-- Если на шильдике вместо потребительского имени указан только внутризаводской индекс кузова/платформы (частая ситуация для китайских табличек) — можно попробовать определить модель по VIN (WMI+VDS), но только если ты уверен; иначе оставь поле пустым, а не гадай.
+- Марку и модель возвращай на английском/латиницей (например "Zeekr", "Geely", "Toyota"), даже если на шильдике они написаны иероглифами — переведи или транслитерируй по общепринятому написанию бренда.
+- Поле "model" — это МАРКЕТИНГОВОЕ название модели автомобиля (например "Camry", "Zeekr 001", "RAV4"), а НЕ технический код кузова/двигателя/платформы и НЕ название какой-либо AI-системы или языковой модели. Категорически не подставляй ничего похожего на "gemini", "gpt", версию модели ИИ или другой технический код вместо названия автомобиля.
+- Если потребительское название модели явно не написано на шильдике (частая ситуация для китайских табличек — там часто только внутризаводской индекс кузова вида "整车型号", код двигателя и VIN) — используй инструмент поиска (google_search), чтобы определить настоящую модель по VIN (первые символы — WMI+VDS), по коду кузова/платформы или по производителю (например "浙江吉利汽车有限公司" = Zhejiang Geely Automobile — модели могут продаваться под брендом Geely или Zeekr). Ищи по VIN, по коду типа "整车型号"/"WR6511..." вместе с названием завода-изготовителя.
+- Если после попытки поиска модель всё равно определить не удалось однозначно — верни пустую строку "", не гадай и не оставляй технический код вместо названия.
 - Если значение не видно или не удается надежно определить — верни null для числового поля или пустую строку для текстового.
 - VIN возвращай без пробелов, максимум 17 символов.
-- Для мощности в kW и hp используй значение, явно указанное на табличке; если указана только одна единица, вторую можно вычислить.
-- engine_type: petrol, diesel, hybrid, phev или electric.
+- Для мощности в kW и hp используй значение, явно указанное на табличке; если указана только одна единица, вторую можно вычислить. Для гибридов/электромобилей с раздельно указанной мощностью ДВС и электромотора(ов) — используй суммарную (системную) мощность автомобиля, если она указана отдельно, иначе используй мощность двигателя внутреннего сгорания (не мощность одного из электромоторов) как основную.
+- engine_type: petrol, diesel, hybrid, phev или electric. Если на шильдике одновременно указаны двигатель внутреннего сгорания И тяговая батарея/электромотор — это phev или hybrid, не electric.
 - drive_type: fwd, rwd или awd. Если привод не указан, выбери awd только если это однозначно следует из таблички; иначе используй fwd как технический placeholder и confidence 0.
 - confidence — твоя уверенность именно в распознавании каждого ключевого поля, от 0 до 1. Если поле оставлено пустым/null из-за неуверенности — confidence для него должен быть низким (ближе к 0), а не высоким.
 
-Верни строго JSON по заданной схеме.`;
+Ответь СТРОГО одним JSON-объектом в следующем формате, без markdown-разметки, без \`\`\`json, без пояснений до или после:
+{
+  "brand": string, "model": string, "modification": string, "vin": string,
+  "production_year": number|null, "engine_volume_cc": number|null,
+  "power_hp": number|null, "power_kw": number|null,
+  "fuel_type": string, "engine_type": string, "transmission": string, "drive_type": string,
+  "confidence": { "brand": number, "model": number, "production_year": number, "engine_volume_cc": number, "power_hp": number }
+}`;
 
     const response = await fetch(`${GEMINI_API_BASE}/${encodeURIComponent(model)}:generateContent`, {
       method: "POST",
@@ -190,10 +215,12 @@ Deno.serve(async (req) => {
             { text: prompt },
           ],
         }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema,
-        },
+        tools: [{ google_search: {} }],
+        // ВАЖНО: responseSchema/responseMimeType намеренно НЕ используются вместе
+        // с tools — Gemini не гарантирует строгий JSON-режим, когда задействован
+        // инструмент (google_search), часть запросов может тихо вернуть пустой/
+        // некорректный ответ. Просим JSON текстом в промпте и разбираем его ниже
+        // через extractJsonFromText() с regex-фолбэком на случай markdown-обёртки.
       }),
     });
 
@@ -215,10 +242,8 @@ Deno.serve(async (req) => {
       return jsonResponse({ error: "Gemini не вернул результат распознавания", code: "GEMINI_EMPTY_RESPONSE", model }, 502);
     }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
+    const parsed = extractJsonFromText(text);
+    if (!parsed) {
       console.error("Gemini returned invalid JSON", text.slice(0, 4000));
       return jsonResponse({ error: "Gemini вернул некорректный JSON", code: "GEMINI_INVALID_JSON", model }, 502);
     }
