@@ -91,6 +91,13 @@ function extractText(payload: any): string {
 
 function normalizeModelOutput(value: any): OcrResponse {
   const empty = (v: any) => (typeof v === "string" ? v : "");
+  // Подстраховка помимо промпта: если модель "распозналась" как имя ИИ-системы —
+  // это стопроцентная галлюцинация, а не марка автомобиля.
+  const AI_NAME_PATTERN = /gemini|gpt-?\d|chatgpt|claude|llama|qwen|deepseek|mistral|copilot/i;
+  const carModel = (v: any) => {
+    const s = empty(v).trim();
+    return AI_NAME_PATTERN.test(s) ? "" : s;
+  };
   const numOrNull = (v: any) => (typeof v === "number" && Number.isFinite(v) ? v : null);
   const confidence = value?.confidence ?? {};
   const clamp = (v: any) => {
@@ -104,7 +111,7 @@ function normalizeModelOutput(value: any): OcrResponse {
 
   return {
     brand: empty(value?.brand),
-    model: empty(value?.model),
+    model: carModel(value?.model),
     modification: empty(value?.modification),
     vin: empty(value?.vin).toUpperCase().slice(0, 17),
     production_year: numOrNull(value?.production_year),
@@ -158,12 +165,14 @@ Deno.serve(async (req) => {
 
 Правила:
 - Не придумывай VIN, год, объем, мощность или модель.
+- Поле "model" — это МАРКЕТИНГОВОЕ название модели автомобиля (например "Camry", "Corolla", "RAV4"), а НЕ технический код кузова/двигателя/платформы и НЕ название какой-либо AI-системы или языковой модели. Если название модели явно не написано на шильдике и не считывается однозначно из VIN, верни пустую строку "" — категорически не подставляй ничего похожего на "gemini", "gpt", версию модели ИИ или другой технический код вместо названия автомобиля.
+- Если на шильдике вместо потребительского имени указан только внутризаводской индекс кузова/платформы (частая ситуация для китайских табличек) — можно попробовать определить модель по VIN (WMI+VDS), но только если ты уверен; иначе оставь поле пустым, а не гадай.
 - Если значение не видно или не удается надежно определить — верни null для числового поля или пустую строку для текстового.
 - VIN возвращай без пробелов, максимум 17 символов.
 - Для мощности в kW и hp используй значение, явно указанное на табличке; если указана только одна единица, вторую можно вычислить.
 - engine_type: petrol, diesel, hybrid, phev или electric.
 - drive_type: fwd, rwd или awd. Если привод не указан, выбери awd только если это однозначно следует из таблички; иначе используй fwd как технический placeholder и confidence 0.
-- confidence — твоя уверенность именно в распознавании каждого ключевого поля, от 0 до 1.
+- confidence — твоя уверенность именно в распознавании каждого ключевого поля, от 0 до 1. Если поле оставлено пустым/null из-за неуверенности — confidence для него должен быть низким (ближе к 0), а не высоким.
 
 Верни строго JSON по заданной схеме.`;
 
