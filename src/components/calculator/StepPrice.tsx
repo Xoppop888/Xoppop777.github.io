@@ -28,9 +28,9 @@ export default function StepPrice({
     update({ china_costs: { ...input.china_costs, ...p } });
 
   const chinaTotal = D(input.china_costs.delivery_cny)
-    .plus(input.china_costs.china_russia_cny)
-    .plus(input.china_costs.seller_fee_cny)
-    .plus(input.china_costs.other_cny);
+    .plus(D(input.china_costs.china_russia_cny))
+    .plus(D(input.china_costs.seller_fee_cny))
+    .plus(D(input.china_costs.other_cny));
 
   return (
     <div className="anim-fade-up">
