@@ -1,7 +1,8 @@
 import { useEffect, type ReactNode } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
-import { Calculator, History, LayoutDashboard, User, LogOut } from "lucide-react";
+import { Calculator, History, LayoutDashboard, User, LogOut, Languages } from "lucide-react";
 import { useApp } from "../state/AppContext";
+import { useLanguage } from "../state/LanguageContext";
 import { Badge, Button } from "./ui";
 
 export function Logo({ size = 34 }: { size?: number }) {
@@ -31,6 +32,7 @@ const navCls = ({ isActive }: { isActive: boolean }) =>
 
 export default function Layout({ children }: { children: ReactNode }) {
   const { user, isDemo, signOut } = useApp();
+  const { lang, toggleLang, t } = useLanguage();
   const location = useLocation();
 
   useEffect(() => {
@@ -47,18 +49,26 @@ export default function Layout({ children }: { children: ReactNode }) {
           <nav className="flex items-center gap-1.5">
             <NavLink to="/calculator" className={navCls}>
               <Calculator size={16} />
-              <span className="hidden sm:inline">Калькулятор</span>
+              <span className="hidden sm:inline">{t("nav_calculator")}</span>
             </NavLink>
             <NavLink to="/calculations" className={navCls}>
               <History size={16} />
-              <span className="hidden sm:inline">Мои расчеты</span>
+              <span className="hidden sm:inline">{t("nav_calculations")}</span>
             </NavLink>
             {user?.role === "admin" && (
               <NavLink to="/admin" className={navCls}>
                 <LayoutDashboard size={16} />
-                <span className="hidden sm:inline">Админ</span>
+                <span className="hidden sm:inline">{t("nav_admin")}</span>
               </NavLink>
             )}
+            <button
+              onClick={toggleLang}
+              className="flex items-center gap-1.5 px-2.5 h-10 rounded-[10px] text-[12.5px] font-bold text-ink-300 hover:text-ink-50 hover:bg-ink-800 transition-colors cursor-pointer border border-transparent"
+              title={lang === "ru" ? "Switch to English" : "Переключить на русский"}
+            >
+              <Languages size={16} />
+              <span>{lang === "ru" ? "EN" : "RU"}</span>
+            </button>
             {user ? (
               <div className="flex items-center gap-1.5 pl-1.5">
                 <NavLink to="/profile" className={navCls}>
@@ -68,7 +78,7 @@ export default function Layout({ children }: { children: ReactNode }) {
                 <button
                   onClick={() => void signOut()}
                   className="p-2.5 rounded-[10px] text-ink-400 hover:text-danger-400 hover:bg-ink-800 transition-colors cursor-pointer"
-                  title="Выйти"
+                  title={t("nav_logout")}
                 >
                   <LogOut size={16} />
                 </button>
@@ -76,7 +86,7 @@ export default function Layout({ children }: { children: ReactNode }) {
             ) : (
               <Link to="/login" className="ml-1.5">
                 <Button size="sm" variant="outline">
-                  Войти
+                  {t("nav_login")}
                 </Button>
               </Link>
             )}
@@ -85,7 +95,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         {isDemo && (
           <div className="bg-gold-900/60 border-t border-gold-700/30">
             <div className="max-w-[1240px] mx-auto px-4 sm:px-6 py-1.5 flex items-center gap-2">
-              <Badge tone="gold">DEMO DATA</Badge>
+              <Badge tone="gold">{t("nav_demo").toUpperCase()}</Badge>
               <p className="text-[11.5px] text-gold-300/90 font-medium">
                 Локальный демо-режим: данные хранятся в браузере, тарифы и курсы — демонстрационные. Подключите Supabase и Edge Functions для production.
               </p>

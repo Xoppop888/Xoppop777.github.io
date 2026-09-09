@@ -1,5 +1,6 @@
 import { HashRouter, Routes, Route, Link } from "react-router-dom";
 import { AppProvider } from "./state/AppContext";
+import { LanguageProvider } from "./state/LanguageContext";
 import { ToastProvider, Button } from "./components/ui";
 import Layout from "./components/Layout";
 import LandingPage from "./pages/LandingPage";
@@ -25,6 +26,7 @@ function NotFound() {
 export default function App() {
   return (
     <AppProvider>
+      <LanguageProvider>
       <ToastProvider>
         <HashRouter>
           <Layout>
@@ -41,6 +43,7 @@ export default function App() {
           </Layout>
         </HashRouter>
       </ToastProvider>
+      </LanguageProvider>
     </AppProvider>
   );
 }

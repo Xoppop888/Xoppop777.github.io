@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { ScanLine, LineChart, Layers, ArrowRight, Camera, Coins, Calculator, ShieldCheck, Database, FileCheck2 } from "lucide-react";
 import { Button, Badge } from "../components/ui";
 import { useApp } from "../state/AppContext";
+import { useLanguage } from "../state/LanguageContext";
 
 const PLATE_ROWS = [
   { k: "Марка / модель", v: "BMW X5 xDrive40i", w: "72%" },
@@ -69,27 +70,27 @@ function PlateScan() {
 
 export default function LandingPage() {
   const { isDemo } = useApp();
+  const { t } = useLanguage();
   return (
     <div>
       {/* ===================== HERO ===================== */}
       <section className="max-w-[1240px] mx-auto px-4 sm:px-6 pt-12 sm:pt-20 pb-16 grid grid-cols-1 lg:grid-cols-[1.05fr_1fr] gap-12 lg:gap-10 items-center">
         <div>
           <div className="flex items-center gap-2.5 mb-6 anim-fade-up">
-            <Badge tone="gold">Китай → Россия</Badge>
-            {isDemo && <Badge tone="neutral">демо-режим</Badge>}
+            <Badge tone="gold">{t("landing_badge")}</Badge>
+            {isDemo && <Badge tone="neutral">{t("nav_demo")}</Badge>}
           </div>
           <h1 className="font-display text-[30px] sm:text-[42px] lg:text-[46px] leading-[1.12] font-bold text-ink-50 anim-fade-up anim-d1">
-            Рассчитайте конечную стоимость автомобиля{" "}
-            <span className="text-gold-500">из Китая</span>
+            {t("landing_title_1")}{" "}
+            <span className="text-gold-500">{t("landing_title_2")}</span>
           </h1>
           <p className="text-[15px] sm:text-base text-ink-300 leading-relaxed mt-5 max-w-xl anim-fade-up anim-d2">
-            Загрузите фото шильдика, укажите цену автомобиля — система автоматически рассчитает ориентировочную
-            стоимость автомобиля в России.
+            {t("landing_hero_desc")}
           </p>
           <div className="flex flex-col sm:flex-row gap-3.5 mt-8 anim-fade-up anim-d3">
             <Link to="/calculator">
               <Button size="lg" className="w-full sm:w-auto px-9">
-                Рассчитать стоимость в России <ArrowRight size={18} />
+                {t("landing_cta_start")} <ArrowRight size={18} />
               </Button>
             </Link>
             <Button
@@ -98,14 +99,14 @@ export default function LandingPage() {
               className="w-full sm:w-auto"
               onClick={() => document.getElementById("how")?.scrollIntoView({ behavior: "smooth" })}
             >
-              Как это работает
+              {t("landing_cta_how")}
             </Button>
           </div>
           <div className="flex items-center gap-5 mt-9 anim-fade-up anim-d4">
             {[
-              { k: "Фото", d: "10 сек" },
-              { k: "Цена", d: "1 мин" },
-              { k: "Расчет", d: "сразу" },
+              { k: t("landing_stat_photo"), d: t("landing_stat_photo_val") },
+              { k: t("landing_stat_price"), d: t("landing_stat_price_val") },
+              { k: t("landing_stat_calc"), d: t("landing_stat_calc_val") },
             ].map((s, i) => (
               <div key={s.k} className="flex items-center gap-5">
                 <div>
@@ -125,23 +126,23 @@ export default function LandingPage() {
       {/* ===================== ПРЕИМУЩЕСТВА ===================== */}
       <section className="border-y border-ink-800 bg-ink-850/50">
         <div className="max-w-[1240px] mx-auto px-4 sm:px-6 py-16">
-          <p className="text-[12px] font-bold uppercase tracking-[0.16em] text-gold-400 mb-8">Что внутри</p>
+          <p className="text-[12px] font-bold uppercase tracking-[0.16em] text-gold-400 mb-8">{t("landing_whats_inside")}</p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-px bg-ink-700 rounded-2xl overflow-hidden border border-ink-700">
             {[
               {
                 icon: <Camera size={22} />,
-                title: "Распознавание автомобиля",
-                text: "Загрузите фото шильдика — характеристики определятся автоматически. Каждое поле можно проверить и исправить.",
+                title: t("landing_feat1_title"),
+                text: t("landing_feat1_text"),
               },
               {
                 icon: <LineChart size={22} />,
-                title: "Актуальные курсы",
-                text: "Курс EUR ЦБ РФ и расчетный курс CNY с надбавкой. Источники, даты и ручной ввод — всё прозрачно.",
+                title: t("landing_feat2_title"),
+                text: t("landing_feat2_text"),
               },
               {
                 icon: <Layers size={22} />,
-                title: "Полная стоимость",
-                text: "Таможня + утильсбор + доставка + брокер + дополнительные расходы. Все промежуточные суммы видны.",
+                title: t("landing_feat3_title"),
+                text: t("landing_feat3_text"),
               },
             ].map((f, i) => (
               <div key={f.title} className={`bg-ink-900 p-7 sm:p-8 ${i === 1 ? "md:bg-ink-850" : ""} group hover:bg-ink-850 transition-colors`}>
@@ -160,27 +161,27 @@ export default function LandingPage() {
       <section id="how" className="max-w-[1240px] mx-auto px-4 sm:px-6 py-16">
         <div className="card p-6 sm:p-10 relative overflow-hidden">
           <div className="absolute -right-20 -top-20 w-72 h-72 rounded-full bg-gold-500/5 blur-2xl" />
-          <p className="text-[12px] font-bold uppercase tracking-[0.16em] text-gold-400">Единая формула</p>
-          <h2 className="font-display text-xl sm:text-2xl font-bold text-ink-50 mt-3">Все слагаемые — на одном экране</h2>
+          <p className="text-[12px] font-bold uppercase tracking-[0.16em] text-gold-400">{t("landing_formula_label")}</p>
+          <h2 className="font-display text-xl sm:text-2xl font-bold text-ink-50 mt-3">{t("landing_formula_title")}</h2>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2 mt-6 font-display text-[13px] sm:text-[15px] font-semibold">
             {[
-              ["ИТОГ", "text-gold-400 text-lg"],
+              [t("f_total"), "text-gold-400 text-lg"],
               ["=", "text-ink-500"],
-              ["автомобиль в ₽", "text-ink-100"],
+              [t("f_car"), "text-ink-100"],
               ["+", "text-ink-500"],
-              ["пошлина", "text-ink-100"],
+              [t("f_duty"), "text-ink-100"],
               ["+", "text-ink-500"],
-              ["таможенный сбор", "text-ink-100"],
+              [t("f_fee"), "text-ink-100"],
               ["+", "text-ink-500"],
-              ["утильсбор", "text-ink-100"],
+              [t("f_recycling"), "text-ink-100"],
               ["+", "text-ink-500"],
-              ["акциз / НДС", "text-ink-300"],
+              [t("f_excise"), "text-ink-300"],
               ["+", "text-ink-500"],
-              ["доставка", "text-ink-100"],
+              [t("f_delivery"), "text-ink-100"],
               ["+", "text-ink-500"],
-              ["брокер", "text-ink-100"],
+              [t("f_broker"), "text-ink-100"],
               ["+", "text-ink-500"],
-              ["прочие расходы", "text-ink-100"],
+              [t("f_other"), "text-ink-100"],
             ].map(([t, c], i) => (
               <span key={i} className={c}>
                 {t}
@@ -189,9 +190,9 @@ export default function LandingPage() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-9">
             {[
-              { icon: <Camera size={17} />, t: "1 · Фото шильдика", d: "AI распознает автомобиль, вы проверяете данные" },
-              { icon: <Coins size={17} />, t: "2 · Цена в Китае", d: "Цена покупки, инвойс и расходы в юанях" },
-              { icon: <Calculator size={17} />, t: "3 · Расчет", d: "Курсы, таможня, доставка, брокер — и итог" },
+              { icon: <Camera size={17} />, t: t("landing_step1_t"), d: t("landing_step1_d") },
+              { icon: <Coins size={17} />, t: t("landing_step2_t"), d: t("landing_step2_d") },
+              { icon: <Calculator size={17} />, t: t("landing_step3_t"), d: t("landing_step3_d") },
             ].map((s) => (
               <div key={s.t} className="rounded-xl border border-ink-700 bg-ink-800/60 p-4.5">
                 <p className="flex items-center gap-2 font-display text-[13.5px] font-bold text-ink-50">
@@ -208,9 +209,9 @@ export default function LandingPage() {
       <section className="max-w-[1240px] mx-auto px-4 sm:px-6 pb-16">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {[
-            { icon: <Database size={18} />, t: "Версионирование расчетов", d: "Каждый расчет сохраняет snapshot курсов и тарифов — старые расчеты не меняются при обновлении ставок." },
-            { icon: <ShieldCheck size={18} />, t: "Данные под защитой", d: "Расчеты видны только вам. Тарифы и курсы изменяются только администратором." },
-            { icon: <FileCheck2 size={18} />, t: "PDF-отчет", d: "Полная детализация с курсами, источниками и примененными правилами — одним файлом." },
+            { icon: <Database size={18} />, t: t("landing_trust1_t"), d: t("landing_trust1_d") },
+            { icon: <ShieldCheck size={18} />, t: t("landing_trust2_t"), d: t("landing_trust2_d") },
+            { icon: <FileCheck2 size={18} />, t: t("landing_trust3_t"), d: t("landing_trust3_d") },
           ].map((x) => (
             <div key={x.t} className="flex gap-3.5">
               <span className="w-10 h-10 rounded-[10px] bg-ink-750 border border-ink-600 text-gold-400 flex items-center justify-center shrink-0">
