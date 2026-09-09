@@ -149,7 +149,8 @@ ${VTB_URL}
 Официальная страница ВТБ, которую Gemini должен открыть через URL Context:
 ${VTB_URL}
 
-Не используй другие сайты и не используй Google Search grounding.`;
+Не используй другие сайты и не используй Google Search grounding.
+Ответь СТРОГО одним JSON-объектом в указанном формате, без markdown-разметки, без \`\`\`json, без пояснений до или после.`;
 
     const ai = await fetch(url, {
       method: "POST",
@@ -160,20 +161,11 @@ ${VTB_URL}
       body: JSON.stringify({
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         tools: [{ url_context: {} }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "object",
-            properties: {
-              rate: { type: "number", nullable: true },
-              direction: { type: "string", nullable: true, enum: ["sell", "buy", "mid"] },
-              date: { type: "string", nullable: true },
-              confidence: { type: "number", minimum: 0, maximum: 1 },
-              source_note: { type: "string" },
-            },
-            required: ["rate", "direction", "date", "confidence", "source_note"],
-          },
-        },
+        // ВАЖНО: responseSchema/responseMimeType намеренно НЕ используются вместе
+        // с tools — Gemini не гарантирует соблюдение строгой JSON-схемы, когда
+        // задействован инструмент (url_context/google_search), и часть запросов
+        // может тихо возвращать пустой/некорректный ответ. Просим JSON текстом
+        // в промпте и разбираем его ниже через extractJson() с regex-фолбэком.
       }),
     });
 
