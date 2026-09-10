@@ -64,10 +64,10 @@ export default function Layout({ children }: { children: ReactNode }) {
             <button
               onClick={toggleLang}
               className="flex items-center gap-1.5 px-2.5 h-10 rounded-[10px] text-[12.5px] font-bold text-ink-300 hover:text-ink-50 hover:bg-ink-800 transition-colors cursor-pointer border border-transparent"
-              title={lang === "ru" ? "Switch to English" : "Переключить на русский"}
+              title={lang === "ru" ? "切换到中文" : "Переключить на русский"}
             >
               <Languages size={16} />
-              <span>{lang === "ru" ? "EN" : "RU"}</span>
+              <span>{lang === "ru" ? "中文" : "RU"}</span>
             </button>
             {user ? (
               <div className="flex items-center gap-1.5 pl-1.5">

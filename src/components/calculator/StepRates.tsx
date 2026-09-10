@@ -57,7 +57,7 @@ export default function StepRates({
         setCnyError("");
         toast("info", `Использован сохраненный курс от ${fmtDateTime(cached.fetched_at)}`);
       } else {
-        setCnyError(e instanceof Error ? e.message : "Не удалось получить актуальный курс ВТБ (Gemini + Google Search)");
+        setCnyError(e instanceof Error ? e.message : "Не удалось получить актуальный курс ВТБ");
         setCnyStatus("error");
       }
     }
@@ -147,7 +147,7 @@ export default function StepRates({
             <>
               <div className="flex items-center gap-2 mb-2 flex-wrap">
                 <Badge tone={sourceTone(input.cny_rate_source)}>
-                  {input.cny_rate_source === "VTB" ? "ВТБ · Gemini + Search" : input.cny_rate_source === "CBR" ? "ЦБ РФ" : input.cny_rate_source === "Manual" ? "Ручной ввод" : "DEMO DATA"}
+                  {input.cny_rate_source === "VTB" ? "ВТБ" : input.cny_rate_source === "CBR" ? "ЦБ РФ" : input.cny_rate_source === "Manual" ? "Ручной ввод" : "DEMO DATA"}
                 </Badge>
                 <span className="text-[11.5px] text-ink-400 font-medium">получен {fmtDateTime(input.cny_fetched_at)}</span>
               </div>
@@ -325,10 +325,8 @@ export default function StepRates({
       </div>
 
       <p className="mt-4 text-[12px] text-ink-400 leading-relaxed max-w-2xl">
-        У ВТБ нет публичного API курсов, поэтому серверная функция{" "}
-        <span className="text-ink-200 font-semibold">get-vtb-cny-rate</span> использует Gemini-агента: он находит актуальный курс CNY
-        на странице котировок ВТБ и проверяет его по официальному курсу ЦБ РФ (допустимое отклонение ±15%). Курс EUR дает функция{" "}
-        <span className="text-ink-200 font-semibold">get-cbr-eur-rate</span>. Все курсы сохраняются в историю (exchange_rates).
+        Курсы обновляются автоматически. Все использованные курсы сохраняются вместе с расчетом — вы всегда сможете увидеть,
+        по какому курсу и на какую дату был выполнен конкретный расчет.
       </p>
     </div>
   );

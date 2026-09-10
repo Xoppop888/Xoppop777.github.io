@@ -20,7 +20,7 @@ const LanguageContext = createContext<LanguageContextValue>({
 export function LanguageProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>(() => {
     const saved = localStorage.getItem(LS_KEY);
-    return saved === "en" ? "en" : "ru";
+    return saved === "zh" ? "zh" : "ru";
   });
 
   useEffect(() => {
@@ -29,7 +29,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
   }, [lang]);
 
   const setLang = (l: Lang) => setLangState(l);
-  const toggleLang = () => setLangState((l) => (l === "ru" ? "en" : "ru"));
+  const toggleLang = () => setLangState((l) => (l === "ru" ? "zh" : "ru"));
   const t = (key: TranslationKey) => translations[lang][key] ?? translations.ru[key];
 
   return <LanguageContext.Provider value={{ lang, setLang, toggleLang, t }}>{children}</LanguageContext.Provider>;

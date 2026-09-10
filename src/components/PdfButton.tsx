@@ -137,7 +137,7 @@ export default function PdfButton({ input, result }: { input: CalculationInput; 
           {/* курсы */}
           <div style={{ display: "flex", gap: 14, marginTop: 20 }}>
             {[
-              { t: "Курс CNY (ВТБ)", v: `1 CNY = ${fmtRate(input.cny_rate)} ₽`, s: `${input.cny_rate_source === "VTB" ? "ВТБ (Gemini + Google Search)" : input.cny_rate_source === "Manual" ? "ручной ввод" : input.cny_rate_source === "Demo" ? "DEMO" : input.cny_rate_source} · надбавка +${input.cny_markup}% от инвойса · ${fmtDateTime(input.cny_fetched_at)}` },
+              { t: "Курс CNY (ВТБ)", v: `1 CNY = ${fmtRate(input.cny_rate)} ₽`, s: `${input.cny_rate_source === "VTB" ? "ВТБ" : input.cny_rate_source === "Manual" ? "ручной ввод" : input.cny_rate_source === "Demo" ? "DEMO" : input.cny_rate_source} · надбавка +${input.cny_markup}% от инвойса · ${fmtDateTime(input.cny_fetched_at)}` },
               { t: "Курс EUR (ЦБ РФ)", v: `1 EUR = ${fmtRate(input.eur_rate)} ₽`, s: `${input.eur_rate_source === "Manual" ? "ручной ввод" : input.eur_rate_source === "Demo" ? "DEMO" : "ЦБ РФ"} · ${fmtDate(input.eur_fetched_at)}` },
             ].map((c) => (
               <div key={c.t} style={{ flex: 1, border: `1px solid ${LINE}`, borderRadius: 10, padding: "12px 16px" }}>
