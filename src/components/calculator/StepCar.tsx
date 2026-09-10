@@ -128,7 +128,7 @@ export default function StepCar({
                 variant="danger"
                 onClick={() => {
                   onImage(null);
-                  onRecognized({ data: emptyCar(), confidence: { brand: 0, model: 0, production_year: 0, engine_volume_cc: 0, power_hp: 0 }, demo: false });
+                  onRecognized({ data: emptyCar(), confidence: { brand: 0, model: 0, production_year: 0, engine_volume_cc: 0, power_hp: 0, engine_type: 0.9 }, demo: false });
                 }}
               >
                 <Trash2 size={14} />
@@ -176,7 +176,7 @@ export default function StepCar({
                 });
                 onRecognized({
                   data: emptyCar(),
-                  confidence: { brand: 0.97, model: 0.94, production_year: 0.9, engine_volume_cc: 0.88, power_hp: 0.92 },
+                  confidence: { brand: 0.97, model: 0.94, production_year: 0.9, engine_volume_cc: 0.88, power_hp: 0.92, engine_type: 0.9 },
                   demo: true,
                 });
                 toast("info", "Заполнен пример: BMW X5 xDrive40i");
@@ -263,7 +263,7 @@ export default function StepCar({
               inputMode="numeric"
             />
           </Field>
-          <Field label="Тип двигателя">
+          <Field label="Тип двигателя" warning={warn("engine_type")} hint="От этого зависит формула расчета пошлины и утильсбора — проверяйте особенно внимательно у гибридов">
             <SelectInput
               value={car.engine_type}
               onChange={(v) => set({ engine_type: v as CarData["engine_type"], vehicle_type: v === "electric" ? "electric" : car.vehicle_type === "electric" ? "passenger" : car.vehicle_type })}

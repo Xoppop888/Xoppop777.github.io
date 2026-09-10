@@ -15,7 +15,13 @@ import { corsHeaders, jsonResponse, readJson, requireUser, isRateLimited } from 
 const RATE_LIMIT = 10;
 const RATE_LIMIT_WINDOW_MIN = 10;
 const DEFAULT_MODEL = "gemini-3.7-flash";
-const GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
+// По умолчанию — официальный Gemini API. Если у Gemini закончилась квота/лимиты
+// или карта не проходит для прямого биллинга Google, можно направить запросы
+// через совместимый прокси (например, qcode.cc, путь /gemini повторяет
+// нативный протокол Google 1:1) — просто задайте:
+//   supabase secrets set GEMINI_API_BASE_URL=https://api.qcode.cc/gemini/v1beta/models
+// Код и авторизация (x-goog-api-key) не меняются.
+const GEMINI_API_BASE = Deno.env.get("GEMINI_API_BASE_URL") || "https://generativelanguage.googleapis.com/v1beta/models";
 
 interface OcrResponse {
   brand: string;
@@ -58,8 +64,9 @@ const responseSchema = {
         production_year: { type: "number", minimum: 0, maximum: 1 },
         engine_volume_cc: { type: "number", minimum: 0, maximum: 1 },
         power_hp: { type: "number", minimum: 0, maximum: 1 },
+        engine_type: { type: "number", minimum: 0, maximum: 1 },
       },
-      required: ["brand", "model", "production_year", "engine_volume_cc", "power_hp"],
+      required: ["brand", "model", "production_year", "engine_volume_cc", "power_hp", "engine_type"],
     },
   },
   required: [
@@ -130,6 +137,7 @@ function normalizeModelOutput(value: any): OcrResponse {
       production_year: clamp(confidence.production_year),
       engine_volume_cc: clamp(confidence.engine_volume_cc),
       power_hp: clamp(confidence.power_hp),
+      engine_type: clamp(confidence.engine_type),
     },
   };
 }
@@ -146,6 +154,22 @@ function extractJsonFromText(text: string): unknown | null {
       return null;
     }
   }
+}
+
+/**
+ * Free-tier Gemini регулярно отвечает 429 (rate limit) или 503 (модель
+ * перегружена) — это временные сбои на стороне Google, не ошибка запроса.
+ * Повторяем 1-2 раза с небольшой паузой перед тем, как сдаться.
+ */
+async function fetchGeminiWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {
+  let last: Response | null = null;
+  for (let i = 0; i < attempts; i++) {
+    const res = await fetch(url, init);
+    if (res.status !== 429 && res.status !== 503) return res;
+    last = res;
+    if (i < attempts - 1) await new Promise((r) => setTimeout(r, 800 * (i + 1)));
+  }
+  return last!;
 }
 
 Deno.serve(async (req) => {
@@ -188,7 +212,18 @@ Deno.serve(async (req) => {
 - Если значение не видно или не удается надежно определить — верни null для числового поля или пустую строку для текстового.
 - VIN возвращай без пробелов, максимум 17 символов.
 - Для мощности в kW и hp используй значение, явно указанное на табличке; если указана только одна единица, вторую можно вычислить. Для гибридов/электромобилей с раздельно указанной мощностью ДВС и электромотора(ов) — используй суммарную (системную) мощность автомобиля, если она указана отдельно, иначе используй мощность двигателя внутреннего сгорания (не мощность одного из электромоторов) как основную.
-- engine_type: petrol, diesel, hybrid, phev или electric. Если на шильдике одновременно указаны двигатель внутреннего сгорания И тяговая батарея/электромотор — это phev или hybrid, не electric.
+- engine_type — определи МАКСИМАЛЬНО ВНИМАТЕЛЬНО: от этого зависит, по какой формуле считается таможенная пошлина и утильсбор (гибриды/электро считаются иначе, чем обычный ДВС), ошибка здесь стоит реальных денег клиенту. Возможные значения: petrol, diesel, hybrid, phev, electric.
+  Ищи на шильдике одновременно ВСЕ из следующих типов полей (китайские таблички почти всегда содержат несколько из них построчно):
+  * признаки ДВС: "发动机型号" (модель двигателя), "发动机排量" (рабочий объем, см³), "发动机最大净功率" (макс. мощность двигателя), "燃料种类"/"燃油" (вид топлива).
+  * признаки электропривода: "驱动电机型号" (модель тягового электромотора), "驱动电机峰值功率"/"驱动电机额定功率" (мощность электромотора), "动力电池系统额定电压" (напряжение тяговой батареи), "动力电池系统额定容量" (ёмкость батареи, Ah или kWh).
+  Правила определения:
+  * Только признаки ДВС, батарея НЕ упомянута нигде → "petrol" (или "diesel", если явно указано дизельное топливо).
+  * Присутствуют ОДНОВРЕМЕННО и признаки ДВС, и признаки электромотора/батареи на одной табличке → это гибрид или plug-in гибрид, НЕ "electric" и НЕ обычный ДВС. Различай:
+    - "插电式混合动力"/"插电混动"/PHEV в названии модели/модификации, или ёмкость батареи заметно больше (~10+ kWh / указано "可充电") → "phev".
+    - "油电混合"/"混合动力"/HEV без явного указания plug-in, небольшая батарея → "hybrid".
+    - Если явного маркера plug-in/HEV нет, но признаки ДВС и батареи присутствуют одновременно — по умолчанию выбирай "phev" (это чаще встречается на новых китайских премиальных моделях) и снижай confidence.engine_type, а не угадывай молча.
+  * Только признаки электромотора/батареи, "发动机" (двигатель внутреннего сгорания) и объем ДВС полностью ОТСУТСТВУЮТ на табличке → "electric".
+  * confidence.engine_type — отдельная уверенность именно в типе привода (не путай с confidence по мощности/объему). Если на табличке одновременно есть противоречивые/неполные признаки (например, есть электромотор, но неясно, plug-in это или обычный гибрид) — ставь confidence.engine_type не выше 0.6, даже если ты всё же выбрал конкретное значение, чтобы пользователь обязательно перепроверил вручную.
 - drive_type: fwd, rwd или awd. Если привод не указан, выбери awd только если это однозначно следует из таблички; иначе используй fwd как технический placeholder и confidence 0.
 - confidence — твоя уверенность именно в распознавании каждого ключевого поля, от 0 до 1. Если поле оставлено пустым/null из-за неуверенности — confidence для него должен быть низким (ближе к 0), а не высоким.
 
@@ -198,10 +233,10 @@ Deno.serve(async (req) => {
   "production_year": number|null, "engine_volume_cc": number|null,
   "power_hp": number|null, "power_kw": number|null,
   "fuel_type": string, "engine_type": string, "transmission": string, "drive_type": string,
-  "confidence": { "brand": number, "model": number, "production_year": number, "engine_volume_cc": number, "power_hp": number }
+  "confidence": { "brand": number, "model": number, "production_year": number, "engine_volume_cc": number, "power_hp": number, "engine_type": number }
 }`;
 
-    const response = await fetch(`${GEMINI_API_BASE}/${encodeURIComponent(model)}:generateContent`, {
+    const response = await fetchGeminiWithRetry(`${GEMINI_API_BASE}/${encodeURIComponent(model)}:generateContent`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -229,6 +264,13 @@ Deno.serve(async (req) => {
     if (!response.ok) {
       const providerMessage = payload?.error?.message || `Gemini HTTP ${response.status}`;
       console.error("Gemini API error", { status: response.status, model, message: providerMessage });
+      if (response.status === 429 || response.status === 503) {
+        return jsonResponse({
+          error: "Gemini (бесплатный тариф) сейчас перегружен или превышен лимит запросов. Подождите минуту и попробуйте ещё раз.",
+          code: "GEMINI_OVERLOADED",
+          model,
+        }, 502);
+      }
       return jsonResponse({
         error: `Gemini: ${providerMessage}`,
         code: "GEMINI_API_ERROR",

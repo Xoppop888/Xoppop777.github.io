@@ -31,6 +31,7 @@ export interface OcrConfidence {
   production_year: number;
   engine_volume_cc: number;
   power_hp: number;
+  engine_type: number;
 }
 
 export interface OcrResult {
