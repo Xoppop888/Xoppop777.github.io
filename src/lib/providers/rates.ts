@@ -28,7 +28,7 @@ export class EdgeRateProvider implements RateProvider {
     const headers = await getEdgeAuthHeaders();
     const res = await timeout(
       fetch(`${this.base}/get-vtb-cny-rate`, { method: "POST", headers, body: "{}" }),
-      9000
+      25000 // увеличено с 9с: backend теперь делает до 3 попыток при перегрузке Gemini (429/503)
     );
     const j = (await res.json().catch(() => ({}))) as { rate?: string; fetched_at?: string; error?: string };
     if (res.status === 401) throw new Error("Войдите в аккаунт, чтобы запросить курс ВТБ");

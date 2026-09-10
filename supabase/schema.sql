@@ -327,3 +327,26 @@ begin
   ) into result;
   return result;
 end $$;
+
+-- ---------- явные GRANT для anon/authenticated ----------
+-- Без этого PostgREST может отвечать 403 на некоторые таблицы даже при
+-- корректных RLS-политиках: RLS ограничивает СТРОКИ, но базовое право на
+-- операцию (SELECT/INSERT/...) над таблицей должно быть выдано отдельно.
+-- Обычно Supabase выдаёт эти права автоматически, но для таблиц, созданных
+-- через сырой SQL (а не через UI-конструктор), это стоит делать явно.
+grant usage on schema public to anon, authenticated;
+
+grant select on public.customs_rules to anon, authenticated;
+grant select on public.recycling_fee_rules to anon, authenticated;
+grant select, insert, update on public.exchange_rates to authenticated;
+grant select on public.app_settings to anon, authenticated;
+grant select on public.calculation_rule_versions to anon, authenticated;
+grant select on public.additional_expense_types to anon, authenticated;
+grant select, update on public.profiles to authenticated;
+grant select, insert, delete on public.calculations to authenticated;
+-- api_rate_limits: право на операцию нужно, чтобы RLS вообще начал работать,
+-- но политика rate_limits_none (using(false)) в любом случае блокирует все строки
+-- для обычных пользователей — реальный доступ есть только у service role.
+grant select, insert on public.api_rate_limits to authenticated;
+
+grant usage, select on all sequences in schema public to authenticated;
