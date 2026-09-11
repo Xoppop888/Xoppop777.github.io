@@ -1,23 +1,11 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
 
 export default defineConfig({
-  plugins: [react()],
-  base: "/Xoppop777.github.io/",
-  build: {
-    modulePreload: {
-      // Отключает полифилл, из-за которого браузер ругается
-      // "cross-world service worker resource mismatch".
-      polyfill: false,
-    },
-  },
-  // ... остальная часть конфига без изменений
-});
-
-export default defineConfig({
+  // Относительный base — работает и в корне домена, и в подпапке
+  // (репозиторий Xoppop777.github.io не совпадает с именем аккаунта Xoppop888,
+  // поэтому GitHub Pages отдаёт сайт по пути /Xoppop777.github.io/, не с корня).
   base: "./",
   plugins: [react(), tailwindcss()],
   server: {
@@ -29,6 +17,11 @@ export default defineConfig({
     },
   },
   build: {
+    modulePreload: {
+      // Отключает полифилл модуля предзагрузки — убирает предупреждение в консоли
+      // "cross-world service worker resource mismatch" на GitHub Pages.
+      polyfill: false,
+    },
     rollupOptions: {
       output: {
         manualChunks: {
