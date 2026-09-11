@@ -1,3 +1,4 @@
+import { fetchWithRetry } from "./fetchWithRetry";
 import type { OcrResult, CarData } from "../types";
 import { emptyCar } from "../types";
 import { getEdgeAuthHeaders } from "../supabaseClient";
@@ -7,7 +8,7 @@ const env = ((import.meta as unknown as { env?: Record<string, string> }).env) |
 /**
  * CarRecognitionProvider — abstraction layer над OCR/AI.
  * AI-провайдер подключается ТОЛЬКО через backend (Edge Function analyze-car-plate),
- * секретный ключ GEMINI_API_KEY хранится в Supabase Secrets.
+ * секретный ключ (GROQ_API_KEY / GEMINI_API_KEY) хранится в Supabase Secrets.
  * Замена провайдера не требует изменений frontend.
  */
 export interface CarRecognitionProvider {
@@ -68,16 +69,35 @@ const normalize = (raw: RawOcr, demo: boolean): OcrResult => {
 export class EdgeCarRecognitionProvider implements CarRecognitionProvider {
   async analyze(imageData: string): Promise<OcrResult> {
     const base = env.VITE_EDGE_URL;
+    if (!base) throw new Error("VITE_EDGE_URL не настроен");
+
     const headers = await getEdgeAuthHeaders();
-    const res = await fetch(`${base}/analyze-car-plate`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ image: imageData }),
-    });
-    const j = (await res.json().catch(() => ({}))) as RawOcr & { error?: string };
-    if (res.status === 401) throw new Error("Войдите в аккаунт, чтобы распознать шильдик");
-    if (res.status === 429) throw new Error("Слишком много запросов распознавания. Попробуйте через пару минут.");
-    if (!res.ok) throw new Error(j.error ?? "Сервис распознавания недоступен");
+
+    // fetchWithRetry прозрачно повторяет запрос при 502/503/504 и сетевых ошибках —
+    // это спасает от холодных стартов Supabase Edge Functions.
+    const res = await fetchWithRetry(
+      `${base}/analyze-car-plate`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ image: imageData }),
+      },
+      3,
+    );
+
+    const j = (await res.json().catch(() => ({}))) as RawOcr & { error?: string; code?: string };
+
+    if (res.status === 401) {
+      throw new Error("Войдите в аккаунт, чтобы распознать шильдик");
+    }
+    if (res.status === 429) {
+      throw new Error("Слишком много запросов распознавания. Попробуйте через пару минут.");
+    }
+    if (!res.ok) {
+      // Показываем осмысленное сообщение с бэкенда, если оно есть.
+      throw new Error(j.error ?? `Сервис распознавания недоступен (HTTP ${res.status})`);
+    }
+
     return normalize(j, false);
   }
 }
