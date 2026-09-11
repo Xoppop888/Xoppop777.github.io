@@ -1,15 +1,14 @@
 // Supabase Edge Function: analyze-car-plate
 //
 // Провайдер выбирается автоматически по тому, какой ключ настроен:
-//   1) GROQ_API_KEY задан → используется Groq (Llama 4 Scout, vision).
-//      Бесплатный тариф Groq: 30 запросов/мин, 14 400/день, без карты —
-//      на порядки щедрее бесплатного тарифа Gemini.
+//   1) GROQ_API_KEY задан → используется Groq (Qwen 3.6 27B, vision).
+//      Бесплатный тариф Groq: 30 запросов/мин, 1000/день, без карты.
 //   2) Иначе, если задан GEMINI_API_KEY → используется Gemini (как раньше),
 //      с поддержкой google_search для доопределения модели по VIN/коду кузова.
 //
 // Секреты (Supabase Secrets):
 //   GROQ_API_KEY=gsk_...              (получить на console.groq.com, без карты)
-//   GROQ_MODEL=meta-llama/llama-4-scout-17b-16e-instruct   (опционально)
+//   GROQ_MODEL=qwen/qwen3.6-27b       (опционально; НЕ используйте старые llama-модели — они удалены)
 //   GEMINI_API_KEY=...                (опционально, фолбэк)
 //   GEMINI_MODEL=gemini-3.7-flash     (опционально)
 //   GEMINI_API_BASE_URL=...           (опционально, напр. qcode.cc)
@@ -22,9 +21,22 @@ import { corsHeaders, jsonResponse, readJson, requireUser, isRateLimited } from 
 const RATE_LIMIT = 10;
 const RATE_LIMIT_WINDOW_MIN = 10;
 
-const GROQ_DEFAULT_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct";
+const GROQ_DEFAULT_MODEL = "qwen/qwen3.6-27b";
 const GEMINI_DEFAULT_MODEL = "gemini-3.7-flash";
 const GEMINI_API_BASE = Deno.env.get("GEMINI_API_BASE_URL") || "https://generativelanguage.googleapis.com/v1beta/models";
+
+/**
+ * Модели Groq, которые были удалены из бесплатного и developer-тиров.
+ * Если в GROQ_MODEL прописана одна из них — падаем с понятным сообщением,
+ * а не ловим невнятный "model does not exist" от API.
+ */
+const DEPRECATED_GROQ_MODELS = new Set([
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  "meta-llama/llama-4-maverick-17b-128e-instruct",
+  "llama-3.3-70b-versatile",
+  "llama-3.1-8b-instant",
+  "qwen/qwen3-32b",
+]);
 
 interface OcrResponse {
   brand: string;
@@ -166,9 +178,19 @@ async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Pro
   return last!;
 }
 
-/** Провайдер 1 (по умолчанию, если ключ задан): Groq — Llama 4 Scout, vision. */
+/** Провайдер 1 (по умолчанию, если ключ задан): Groq — Qwen 3.6 27B, vision. */
 async function callGroq(apiKey: string, mimeType: string, data: string) {
   const model = Deno.env.get("GROQ_MODEL") || GROQ_DEFAULT_MODEL;
+
+  // Ранняя проверка: не прописана ли в секретах удалённая модель.
+  if (DEPRECATED_GROQ_MODELS.has(model)) {
+    throw {
+      userMessage: `Модель Groq "${model}" удалена из бесплатного тарифа. Обновите секрет GROQ_MODEL на "qwen/qwen3.6-27b" или удалите его, чтобы использовать значение по умолчанию.`,
+      code: "GROQ_MODEL_DEPRECATED",
+      model,
+    };
+  }
+
   const prompt = buildPrompt(false); // у Groq нет встроенного инструмента поиска
 
   const res = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
@@ -197,7 +219,18 @@ async function callGroq(apiKey: string, mimeType: string, data: string) {
   if (!res.ok) {
     const msg = payload?.error?.message || `Groq HTTP ${res.status}`;
     if (res.status === 429 || res.status === 503) {
-      throw { userMessage: "Groq сейчас перегружен или превышен лимит запросов. Подождите минуту и попробуйте ещё раз.", code: "GROQ_OVERLOADED", model };
+      throw {
+        userMessage: "Groq сейчас перегружен или превышен лимит запросов. Подождите минуту и попробуйте ещё раз.",
+        code: "GROQ_OVERLOADED",
+        model,
+      };
+    }
+    if (res.status === 404 || /does not exist|do not have access/i.test(msg)) {
+      throw {
+        userMessage: `Groq: модель "${model}" недоступна. Обновите секрет GROQ_MODEL на "qwen/qwen3.6-27b".`,
+        code: "GROQ_MODEL_NOT_FOUND",
+        model,
+      };
     }
     throw { userMessage: `Groq: ${msg}`, code: "GROQ_API_ERROR", model };
   }
@@ -231,12 +264,18 @@ async function callGemini(apiKey: string, mimeType: string, data: string) {
   if (!res.ok) {
     const msg = payload?.error?.message || `Gemini HTTP ${res.status}`;
     if (res.status === 429 || res.status === 503) {
-      throw { userMessage: "Gemini (бесплатный тариф) сейчас перегружен или превышен лимит запросов. Подождите минуту и попробуйте ещё раз.", code: "GEMINI_OVERLOADED", model };
+      throw {
+        userMessage: "Gemini (бесплатный тариф) сейчас перегружен или превышен лимит запросов. Подождите минуту и попробуйте ещё раз.",
+        code: "GEMINI_OVERLOADED",
+        model,
+      };
     }
     throw { userMessage: `Gemini: ${msg}`, code: "GEMINI_API_ERROR", model };
   }
   const parts = payload?.candidates?.[0]?.content?.parts;
-  const text = Array.isArray(parts) ? parts.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("\n").trim() : "";
+  const text = Array.isArray(parts)
+    ? parts.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("\n").trim()
+    : "";
   if (!text) throw { userMessage: "Gemini не вернул результат распознавания", code: "GEMINI_EMPTY_RESPONSE", model };
   const parsed = extractJsonFromText(text);
   if (!parsed) {
@@ -263,10 +302,13 @@ Deno.serve(async (req) => {
     const groqKey = Deno.env.get("GROQ_API_KEY");
     const geminiKey = Deno.env.get("GEMINI_API_KEY");
     if (!groqKey && !geminiKey) {
-      return jsonResponse({
-        error: "Не настроен ни GROQ_API_KEY, ни GEMINI_API_KEY в Supabase Secrets",
-        code: "NO_PROVIDER_CONFIGURED",
-      }, 503);
+      return jsonResponse(
+        {
+          error: "Не настроен ни GROQ_API_KEY, ни GEMINI_API_KEY в Supabase Secrets",
+          code: "NO_PROVIDER_CONFIGURED",
+        },
+        503,
+      );
     }
 
     const { mimeType, data } = parseDataUrl(image);
@@ -276,12 +318,25 @@ Deno.serve(async (req) => {
       result = groqKey ? await callGroq(groqKey, mimeType, data) : await callGemini(geminiKey!, mimeType, data);
     } catch (e: any) {
       console.error("analyze-car-plate provider error", e);
-      return jsonResponse({ error: e?.userMessage ?? "Ошибка распознавания", code: e?.code ?? "PROVIDER_ERROR", model: e?.model }, 502);
+      return jsonResponse(
+        {
+          error: e?.userMessage ?? "Ошибка распознавания",
+          code: e?.code ?? "PROVIDER_ERROR",
+          model: e?.model,
+        },
+        502,
+      );
     }
 
     return jsonResponse({ ...normalizeModelOutput(result.parsed), provider: result.provider, model: result.model });
   } catch (e) {
     console.error("analyze-car-plate error", e);
-    return jsonResponse({ error: e instanceof Error ? e.message : "Не удалось распознать данные", code: "OCR_INTERNAL_ERROR" }, 500);
+    return jsonResponse(
+      {
+        error: e instanceof Error ? e.message : "Не удалось распознать данные",
+        code: "OCR_INTERNAL_ERROR",
+      },
+      500,
+    );
   }
 });
