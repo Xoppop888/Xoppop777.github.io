@@ -1,6 +1,21 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+export default defineConfig({
+  plugins: [react()],
+  base: "/Xoppop777.github.io/",
+  build: {
+    modulePreload: {
+      // Отключает полифилл, из-за которого браузер ругается
+      // "cross-world service worker resource mismatch".
+      polyfill: false,
+    },
+  },
+  // ... остальная часть конфига без изменений
+});
 
 export default defineConfig({
   base: "./",
