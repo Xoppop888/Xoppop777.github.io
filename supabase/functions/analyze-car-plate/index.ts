@@ -211,8 +211,6 @@ async function callGroq(apiKey: string, mimeType: string, data: string) {
       ],
       temperature: 0.2,
       max_tokens: 1200,
-      // Ключевое: заставляем модель вернуть именно JSON-объект.
-      response_format: { type: "json_object" },
     }),
   });
 
@@ -232,6 +230,9 @@ async function callGroq(apiKey: string, mimeType: string, data: string) {
         code: "GROQ_MODEL_NOT_FOUND",
         model,
       };
+    }
+    if (payload?.error?.failed_generation) {
+      console.error("Groq failed_generation", String(payload.error.failed_generation).slice(0, 2000));
     }
     throw { userMessage: `Groq: ${msg}`, code: "GROQ_API_ERROR", model };
   }
