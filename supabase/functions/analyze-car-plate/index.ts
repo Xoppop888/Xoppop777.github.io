@@ -2,16 +2,13 @@
 //
 // Провайдер выбирается автоматически по тому, какой ключ настроен:
 //   1) GROQ_API_KEY задан → используется Groq (Qwen 3.6 27B, vision).
-//      Бесплатный тариф Groq: 30 запросов/мин, 1000/день, без карты.
-//   2) Иначе, если задан GEMINI_API_KEY → используется Gemini (как раньше),
-//      с поддержкой google_search для доопределения модели по VIN/коду кузова.
+//   2) Иначе, если задан GEMINI_API_KEY → используется Gemini (с google_search).
 //
 // Секреты (Supabase Secrets):
-//   GROQ_API_KEY=gsk_...              (получить на console.groq.com, без карты)
-//   GROQ_MODEL=qwen/qwen3.6-27b       (опционально; НЕ используйте старые llama-модели — они удалены)
+//   GROQ_API_KEY=gsk_...
+//   GROQ_MODEL=qwen/qwen3.6-27b       (опционально)
 //   GEMINI_API_KEY=...                (опционально, фолбэк)
 //   GEMINI_MODEL=gemini-3.7-flash     (опционально)
-//   GEMINI_API_BASE_URL=...           (опционально, напр. qcode.cc)
 //
 // Deploy:
 //   supabase functions deploy analyze-car-plate
@@ -23,13 +20,9 @@ const RATE_LIMIT_WINDOW_MIN = 10;
 
 const GROQ_DEFAULT_MODEL = "qwen/qwen3.6-27b";
 const GEMINI_DEFAULT_MODEL = "gemini-3.7-flash";
-const GEMINI_API_BASE = Deno.env.get("GEMINI_API_BASE_URL") || "https://generativelanguage.googleapis.com/v1beta/models";
+const GEMINI_API_BASE =
+  Deno.env.get("GEMINI_API_BASE_URL") || "https://generativelanguage.googleapis.com/v1beta/models";
 
-/**
- * Модели Groq, которые были удалены из бесплатного и developer-тиров.
- * Если в GROQ_MODEL прописана одна из них — падаем с понятным сообщением,
- * а не ловим невнятный "model does not exist" от API.
- */
 const DEPRECATED_GROQ_MODELS = new Set([
   "meta-llama/llama-4-scout-17b-16e-instruct",
   "meta-llama/llama-4-maverick-17b-128e-instruct",
@@ -65,16 +58,29 @@ function parseDataUrl(image: string): { mimeType: string; data: string } {
   return { mimeType, data };
 }
 
+/**
+ * Достаём JSON из ответа модели. Модель может вернуть:
+ *   - чистый JSON,
+ *   - JSON в обёртке ```json ... ```,
+ *   - JSON с текстом до/после.
+ */
 function extractJsonFromText(text: string): unknown | null {
+  if (!text) return null;
   try {
     return JSON.parse(text);
   } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return null;
+    // убираем markdown-обёртку, если есть
+    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
     try {
-      return JSON.parse(match[0]);
+      return JSON.parse(cleaned);
     } catch {
-      return null;
+      const match = text.match(/\{[\s\S]*\}/);
+      if (!match) return null;
+      try {
+        return JSON.parse(match[0]);
+      } catch {
+        return null;
+      }
     }
   }
 }
@@ -121,7 +127,6 @@ function normalizeModelOutput(value: any): OcrResponse {
   };
 }
 
-/** Общая часть промпта, не зависящая от провайдера. */
 function buildPrompt(withSearchHint: boolean): string {
   return `Ты — экспертная система распознавания автомобильных заводских шильдиков и VIN-табличек.
 Проанализируй ИЗОБРАЖЕНИЕ, а не угадывай автомобиль по типичным значениям.
@@ -162,11 +167,6 @@ ${withSearchHint ? `- Если потребительское название �
 }`;
 }
 
-/**
- * Многие free-tier провайдеры (и Gemini, и Groq) периодически отвечают 429
- * (rate limit) или 503 (перегружен) — это временный сбой, не ошибка запроса.
- * Повторяем несколько раз с небольшой паузой перед тем, как сдаться.
- */
 async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {
   let last: Response | null = null;
   for (let i = 0; i < attempts; i++) {
@@ -178,20 +178,19 @@ async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Pro
   return last!;
 }
 
-/** Провайдер 1 (по умолчанию, если ключ задан): Groq — Qwen 3.6 27B, vision. */
+/** Groq — Qwen 3.6 27B, vision. */
 async function callGroq(apiKey: string, mimeType: string, data: string) {
   const model = Deno.env.get("GROQ_MODEL") || GROQ_DEFAULT_MODEL;
 
-  // Ранняя проверка: не прописана ли в секретах удалённая модель.
   if (DEPRECATED_GROQ_MODELS.has(model)) {
     throw {
-      userMessage: `Модель Groq "${model}" удалена из бесплатного тарифа. Обновите секрет GROQ_MODEL на "qwen/qwen3.6-27b" или удалите его, чтобы использовать значение по умолчанию.`,
+      userMessage: `Модель Groq "${model}" удалена из бесплатного тарифа. Обновите секрет GROQ_MODEL на "qwen/qwen3.6-27b".`,
       code: "GROQ_MODEL_DEPRECATED",
       model,
     };
   }
 
-  const prompt = buildPrompt(false); // у Groq нет встроенного инструмента поиска
+  const prompt = buildPrompt(false);
 
   const res = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
@@ -212,6 +211,8 @@ async function callGroq(apiKey: string, mimeType: string, data: string) {
       ],
       temperature: 0.2,
       max_tokens: 1200,
+      // Ключевое: заставляем модель вернуть именно JSON-объект.
+      response_format: { type: "json_object" },
     }),
   });
 
@@ -234,10 +235,18 @@ async function callGroq(apiKey: string, mimeType: string, data: string) {
     }
     throw { userMessage: `Groq: ${msg}`, code: "GROQ_API_ERROR", model };
   }
-  const text = payload?.choices?.[0]?.message?.content;
-  if (!text || typeof text !== "string") {
+
+  const message = payload?.choices?.[0]?.message;
+  // Reasoning-модели могут положить ответ в reasoning, а content оставить пустым.
+  let text: string | undefined = typeof message?.content === "string" ? message.content : undefined;
+  if ((!text || !text.trim()) && typeof message?.reasoning === "string") {
+    text = message.reasoning;
+  }
+  if (!text || !text.trim()) {
+    console.error("Groq empty content", JSON.stringify(payload).slice(0, 2000));
     throw { userMessage: "Groq не вернул результат распознавания", code: "GROQ_EMPTY_RESPONSE", model };
   }
+
   const parsed = extractJsonFromText(text);
   if (!parsed) {
     console.error("Groq returned invalid JSON", text.slice(0, 4000));
@@ -246,7 +255,7 @@ async function callGroq(apiKey: string, mimeType: string, data: string) {
   return { parsed, provider: "Groq", model };
 }
 
-/** Провайдер 2 (фолбэк, если GROQ_API_KEY не задан): Gemini, как раньше. */
+/** Gemini — фолбэк с google_search. */
 async function callGemini(apiKey: string, mimeType: string, data: string) {
   const model = Deno.env.get("GEMINI_MODEL") || GEMINI_DEFAULT_MODEL;
   const prompt = buildPrompt(true);
@@ -257,6 +266,7 @@ async function callGemini(apiKey: string, mimeType: string, data: string) {
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ inline_data: { mime_type: mimeType, data } }, { text: prompt }] }],
       tools: [{ google_search: {} }],
+      generationConfig: { responseMimeType: "application/json" },
     }),
   });
 
@@ -272,11 +282,14 @@ async function callGemini(apiKey: string, mimeType: string, data: string) {
     }
     throw { userMessage: `Gemini: ${msg}`, code: "GEMINI_API_ERROR", model };
   }
+
   const parts = payload?.candidates?.[0]?.content?.parts;
   const text = Array.isArray(parts)
     ? parts.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("\n").trim()
     : "";
-  if (!text) throw { userMessage: "Gemini не вернул результат распознавания", code: "GEMINI_EMPTY_RESPONSE", model };
+  if (!text) {
+    throw { userMessage: "Gemini не вернул результат распознавания", code: "GEMINI_EMPTY_RESPONSE", model };
+  }
   const parsed = extractJsonFromText(text);
   if (!parsed) {
     console.error("Gemini returned invalid JSON", text.slice(0, 4000));
