@@ -10,7 +10,7 @@ import { useApp } from "../../state/AppContext";
 import { Button, Badge, MoneyInput, Field, Skeleton, SectionTitle, useToast } from "../ui";
 
 type Status = "loading" | "ok" | "error" | "manual";
-const FRESH_MS = 12 * 60 * 60 * 1000;
+const FRESH_MS = 30 * 60 * 1000;
 const isFresh = (iso: string) => Date.now() - new Date(iso).getTime() < FRESH_MS;
 
 const sourceTone = (s: RateSource): "ok" | "gold" | "danger" | "eur" =>
@@ -95,6 +95,14 @@ export default function StepRates({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible" && cnyStatus !== "manual") void refreshCny();
+    }, 30 * 60 * 1000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cnyStatus]);
+
   const saveManualCny = async () => {
     const v = parseAmount(cnyManual);
     if (!D(v).gt(0)) return toast("error", "Введите корректный курс");
@@ -124,7 +132,7 @@ export default function StepRates({
 
   return (
     <div className="anim-fade-up">
-      <SectionTitle sub="Курс юаня получается через backend (API ВТБ), курс евро — официальный курс ЦБ РФ. Устаревшие курсы не используются молча.">
+      <SectionTitle sub="Курс юаня получается через backend из официального источника ВТБ и автоматически обновляется каждые 30 минут; курс евро — официальный курс ЦБ РФ. Устаревшие курсы не используются молча.">
         3. Курсы валют
       </SectionTitle>
 

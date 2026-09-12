@@ -5,10 +5,12 @@ import { getEdgeAuthHeaders } from "../supabaseClient";
 
 const env = ((import.meta as unknown as { env?: Record<string, string> }).env) || {};
 
+const edgeBase = env.VITE_EDGE_URL || (env.VITE_SUPABASE_URL ? `${env.VITE_SUPABASE_URL.replace(/\/$/, "")}/functions/v1` : "");
+
 /**
  * CarRecognitionProvider — abstraction layer над OCR/AI.
- * AI-провайдер подключается ТОЛЬКО через backend (Edge Function analyze-car-plate),
- * секретный ключ (GROQ_API_KEY / GEMINI_API_KEY) хранится в Supabase Secrets.
+ * Pipeline подключается ТОЛЬКО через backend: PaddleOCR → OpenRouter → ручной ввод.
+ * Все ключи провайдеров хранятся в Supabase Secrets.
  * Замена провайдера не требует изменений frontend.
  */
 export interface CarRecognitionProvider {
@@ -32,7 +34,7 @@ interface RawOcr {
   confidence?: Partial<Record<"brand" | "model" | "production_year" | "engine_volume_cc" | "power_hp" | "engine_type", number>>;
 }
 
-const normalize = (raw: RawOcr, demo: boolean): OcrResult => {
+const normalize = (raw: RawOcr, demo: boolean, meta?: Partial<OcrResult>): OcrResult => {
   const car: CarData = {
     ...emptyCar(),
     brand: raw.brand ?? "",
@@ -63,13 +65,19 @@ const normalize = (raw: RawOcr, demo: boolean): OcrResult => {
       engine_type: raw.confidence?.engine_type ?? 0,
     },
     demo,
+    provider: meta?.provider,
+    ai_model: meta?.ai_model,
+    fallback_used: meta?.fallback_used,
+    manual_required: meta?.manual_required,
+    cache: meta?.cache,
+    diagnostics: meta?.diagnostics,
   };
 };
 
 export class EdgeCarRecognitionProvider implements CarRecognitionProvider {
   async analyze(imageData: string): Promise<OcrResult> {
-    const base = env.VITE_EDGE_URL;
-    if (!base) throw new Error("VITE_EDGE_URL не настроен");
+    const base = edgeBase;
+    if (!base) throw new Error("Supabase не настроен: укажите VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY");
 
     const headers = await getEdgeAuthHeaders();
 
@@ -85,7 +93,7 @@ export class EdgeCarRecognitionProvider implements CarRecognitionProvider {
       3,
     );
 
-    const j = (await res.json().catch(() => ({}))) as RawOcr & { error?: string; code?: string };
+    const j = (await res.json().catch(() => ({}))) as RawOcr & { error?: string; code?: string; provider?: "PaddleOCR" | "OpenRouter"; ai_model?: string; fallback_used?: boolean; manual_required?: boolean; cache?: boolean; diagnostics?: { paddleocr?: string; openrouter?: string } };
 
     if (res.status === 401) {
       throw new Error("Войдите в аккаунт, чтобы распознать шильдик");
@@ -95,10 +103,17 @@ export class EdgeCarRecognitionProvider implements CarRecognitionProvider {
     }
     if (!res.ok) {
       // Показываем осмысленное сообщение с бэкенда, если оно есть.
-      throw new Error(j.error ?? `Сервис распознавания недоступен (HTTP ${res.status})`);
+      throw new Error(`${j.error ?? `Сервис распознавания недоступен (HTTP ${res.status})`}${j.code ? ` [${j.code}]` : ""}`);
     }
 
-    return normalize(j, false);
+    return normalize(j, false, {
+      provider: j.provider,
+      ai_model: j.ai_model,
+      fallback_used: j.fallback_used,
+      manual_required: j.manual_required,
+      cache: j.cache,
+      diagnostics: j.diagnostics,
+    });
   }
 }
 
@@ -145,4 +160,4 @@ export class MockCarRecognitionProvider implements CarRecognitionProvider {
 }
 
 export const getRecognitionProvider = (): CarRecognitionProvider =>
-  env.VITE_EDGE_URL ? new EdgeCarRecognitionProvider() : new MockCarRecognitionProvider();
+  edgeBase ? new EdgeCarRecognitionProvider() : new MockCarRecognitionProvider();

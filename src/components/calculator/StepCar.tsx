@@ -56,10 +56,11 @@ export default function StepCar({
       try {
         const result = await provider.current.analyze(data);
         onRecognized(result);
-        toast("success", result.demo ? "Распознано (демо-режим OCR). Проверьте данные." : "Шильдик распознан. Проверьте данные.");
+        const source = result.provider === "PaddleOCR" ? "PaddleOCR" : result.provider === "OpenRouter" ? "OpenRouter" : "ручной режим";
+        toast("success", result.manual_required ? `${source}: заполните и проверьте поля вручную.` : `${source}: шильдик распознан. Проверьте данные.`);
       } catch (e) {
         logError("ocr", e);
-        const msg = e instanceof Error && e.message.includes("Войдите") ? e.message : "Не удалось распознать данные с фотографии. Введите характеристики автомобиля вручную.";
+        const msg = e instanceof Error && e.message.includes("Войдите") ? e.message : "OCR недоступен. Введите характеристики автомобиля вручную.";
         toast("error", msg);
       } finally {
         setAnalyzing(false);
@@ -137,7 +138,7 @@ export default function StepCar({
             {confidence && !analyzing && (
               <div className="absolute bottom-3 left-3">
                 <Badge tone={confidence.model >= CONFIDENCE_THRESHOLD ? "ok" : "gold"}>
-                  <ShieldCheck size={12} /> OCR{ocrDemo ? " · DEMO" : ""} · модель {(confidence.model * 100).toFixed(0)}%
+                  <ShieldCheck size={12} /> {ocrDemo ? "OCR · DEMO" : "OCR"} · модель {(confidence.model * 100).toFixed(0)}%
                 </Badge>
               </div>
             )}

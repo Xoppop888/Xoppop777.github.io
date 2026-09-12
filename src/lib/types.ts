@@ -38,6 +38,12 @@ export interface OcrResult {
   data: CarData;
   confidence: OcrConfidence;
   demo: boolean;
+  provider?: "PaddleOCR" | "OpenRouter" | "Manual";
+  ai_model?: string;
+  fallback_used?: boolean;
+  manual_required?: boolean;
+  cache?: boolean;
+  diagnostics?: { paddleocr?: string; openrouter?: string };
 }
 
 export interface ExchangeRate {

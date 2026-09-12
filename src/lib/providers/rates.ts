@@ -3,6 +3,8 @@ import { getEdgeAuthHeaders } from "../supabaseClient";
 
 const env = ((import.meta as unknown as { env?: Record<string, string> }).env) || {};
 
+const edgeBase = env.VITE_EDGE_URL || (env.VITE_SUPABASE_URL ? `${env.VITE_SUPABASE_URL.replace(/\/$/, "")}/functions/v1` : "");
+
 /**
  * Абстракция источников курсов.
  * CNY: только через backend (Edge Function get-vtb-cny-rate) — никогда из браузера.
@@ -22,18 +24,18 @@ const timeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
 
 /** Production-провайдер: оба курса через Supabase Edge Functions */
 export class EdgeRateProvider implements RateProvider {
-  private base = env.VITE_EDGE_URL ?? "";
+  private base = edgeBase;
 
   async fetchCnyRate(): Promise<RateResult> {
     const headers = await getEdgeAuthHeaders();
     const res = await timeout(
       fetch(`${this.base}/get-vtb-cny-rate`, { method: "POST", headers, body: "{}" }),
-      25000 // увеличено с 9с: backend теперь делает до 3 попыток при перегрузке Gemini (429/503)
+      25000 // backend получает ВТБ напрямую и может вернуть свежий или stale-кэш
     );
-    const j = (await res.json().catch(() => ({}))) as { rate?: string; fetched_at?: string; error?: string };
+    const j = (await res.json().catch(() => ({}))) as { rate?: string; fetched_at?: string; error?: string; code?: string };
     if (res.status === 401) throw new Error("Войдите в аккаунт, чтобы запросить курс ВТБ");
     if (res.status === 429) throw new Error("Слишком частые запросы курса ВТБ. Попробуйте через пару минут.");
-    if (!res.ok || !j.rate) throw new Error(j.error ?? "Edge function get-vtb-cny-rate недоступна");
+    if (!res.ok || !j.rate) throw new Error(`${j.error ?? "Edge function get-vtb-cny-rate недоступна"}${j.code ? ` [${j.code}]` : ""}`);
     return {
       rate: j.rate,
       source: "VTB",
@@ -48,9 +50,9 @@ export class EdgeRateProvider implements RateProvider {
       fetch(`${this.base}/get-cbr-eur-rate`, { method: "POST", headers, body: "{}" }),
       9000
     );
-    const j = (await res.json().catch(() => ({}))) as { rate?: string; date?: string; error?: string };
+    const j = (await res.json().catch(() => ({}))) as { rate?: string; date?: string; error?: string; code?: string };
     if (res.status === 401) throw new Error("Войдите в аккаунт, чтобы запросить курс ЦБ");
-    if (!res.ok || !j.rate) throw new Error(j.error ?? "Edge function get-cbr-eur-rate недоступна");
+    if (!res.ok || !j.rate) throw new Error(`${j.error ?? "Edge function get-cbr-eur-rate недоступна"}${j.code ? ` [${j.code}]` : ""}`);
     return {
       rate: j.rate,
       source: "CBR",
@@ -68,12 +70,12 @@ export class EdgeRateProvider implements RateProvider {
  */
 export class DevRateProvider implements RateProvider {
   async fetchCnyRate(): Promise<RateResult> {
-    if (env.VITE_EDGE_URL) return new EdgeRateProvider().fetchCnyRate();
-    throw new Error("Курс ВТБ ищет Gemini на backend (Edge Function get-vtb-cny-rate). В dev-режиме backend не подключен — введите курс вручную.");
+    if (edgeBase) return new EdgeRateProvider().fetchCnyRate();
+      throw new Error("Курс ВТБ получается напрямую с backend (без AI). В dev-режиме backend не подключен — введите курс вручную.");
   }
 
   async fetchEurRate(): Promise<RateResult> {
-    if (env.VITE_EDGE_URL) return new EdgeRateProvider().fetchEurRate();
+    if (edgeBase) return new EdgeRateProvider().fetchEurRate();
     const res = await timeout(fetch("https://www.cbr-xml-daily.ru/daily_json.js"), 8000);
     if (!res.ok) throw new Error("Не удалось получить курс EUR ЦБ РФ");
     const j = (await res.json()) as { Date?: string; Valute?: { EUR?: { Value?: number } } };
@@ -111,6 +113,6 @@ export class MockRateProvider implements RateProvider {
 }
 
 export const getRateProvider = (): RateProvider =>
-  env.VITE_EDGE_URL ? new EdgeRateProvider() : new DevRateProvider();
+  edgeBase ? new EdgeRateProvider() : new DevRateProvider();
 
 export const demoRates = new MockRateProvider();

@@ -9,8 +9,7 @@ import { corsHeaders, jsonResponse, supabaseAdmin } from "../_shared/http.ts";
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
-  // Только для cron/админ-вызова — требуем service role key напрямую, иначе это была бы
-  // публичная дверь в платные AI-функции (get-vtb-cny-rate) в обход rate-limit по пользователю.
+  // Только для cron/админ-вызова — требуем service role key напрямую.
   const callerToken = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   if (!callerToken || callerToken !== Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")) {
     return jsonResponse({ error: "Forbidden: только для внутреннего cron-вызова" }, 403);
@@ -20,9 +19,8 @@ Deno.serve(async (req) => {
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   const results: Record<string, unknown> = {};
 
-  // get-vtb-cny-rate и get-cbr-eur-rate требуют авторизации (обычно — сессия пользователя,
-  // чтобы применялся rate-limit); для cron-вызова используем service role key, который
-  // requireUser() распознает отдельно и не подвергает лимиту.
+  // Обе функции требуют авторизации; для cron-вызова используем service role key,
+  // который requireUser() распознает отдельно.
   for (const fn of ["get-vtb-cny-rate", "get-cbr-eur-rate"]) {
     try {
       const res = await fetch(`${base}/functions/v1/${fn}`, {

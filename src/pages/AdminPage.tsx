@@ -214,7 +214,7 @@ function RatesTab() {
         <div>
           <h3 className="font-display text-[15px] font-semibold text-ink-50">{cur} / RUB</h3>
           <p className="text-[12px] text-ink-400 font-medium mt-0.5">
-            {cur === "CNY" ? "Источник: ВТБ · Gemini + Google Search (Edge Function)" : "Источник: ЦБ РФ (официальный)"}
+            {cur === "CNY" ? "Источник: ВТБ · прямой backend fetch + кэш" : "Источник: ЦБ РФ (официальный)"}
           </p>
         </div>
         <div className="flex gap-2">

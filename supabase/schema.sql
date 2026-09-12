@@ -302,6 +302,20 @@ language sql security definer set search_path = public as $$
   delete from public.api_rate_limits where created_at < now() - interval '1 day';
 $$;
 
+-- ---------- recognition_cache (PaddleOCR/OpenRouter) ----------
+create table if not exists public.recognition_cache (
+  image_sha256 text primary key check (image_sha256 ~ '^[a-f0-9]{64}$'),
+  result jsonb not null,
+  provider text not null check (provider in ('PaddleOCR','OpenRouter')),
+  model text,
+  created_at timestamptz not null default now(),
+  expires_at timestamptz not null
+);
+alter table public.recognition_cache enable row level security;
+drop policy if exists recognition_cache_none on public.recognition_cache;
+create policy recognition_cache_none on public.recognition_cache for all using (false) with check (false);
+create index if not exists recognition_cache_expires_idx on public.recognition_cache(expires_at);
+
 -- ---------- Storage: фотографии шильдиков ----------
 insert into storage.buckets (id, name, public) values ('car-plates', 'car-plates', false)
 on conflict (id) do nothing;
@@ -348,5 +362,6 @@ grant select, insert, delete on public.calculations to authenticated;
 -- но политика rate_limits_none (using(false)) в любом случае блокирует все строки
 -- для обычных пользователей — реальный доступ есть только у service role.
 grant select, insert on public.api_rate_limits to authenticated;
+grant select, insert, update, delete on public.recognition_cache to authenticated;
 
 grant usage, select on all sequences in schema public to authenticated;

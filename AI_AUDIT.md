@@ -2,12 +2,12 @@
 
 ## AI functionality
 
-All functionality that requires an LLM/AI provider is routed through Google Gemini in Supabase Edge Functions.
+AI functionality is routed through Supabase Edge Functions, after deterministic OCR has had the first attempt.
 
-1. `analyze-car-plate` — Gemini multimodal vision extracts vehicle data from the uploaded plate/VIN image.
-2. `get-vtb-cny-rate` — Gemini URL Context retrieves the official VTB CNY page for free, then Gemini extracts the current CNY/RUB selling rate from that page. It does **not** use Google Search grounding. URL Context is available on the Gemini API Free Tier.
+1. `analyze-car-plate` — self-hosted PaddleOCR runs first; OpenRouter vision is used only when OCR is unavailable or below confidence threshold. If both fail, the UI requires manual input.
+2. `get-vtb-cny-rate` — direct backend HTTP fetch of the official VTB source; no AI, URL Context, Search grounding, or provider key is used.
 
-Both use `GEMINI_API_KEY` from Supabase Secrets. The key is never exposed to the browser.
+`PADDLEOCR_URL` and `OPENROUTER_API_KEY` are stored only in Supabase Secrets. The keys are never exposed to the browser. Results are cached by SHA-256 image hash.
 
 ## Intentionally non-AI functionality
 
