@@ -1,170 +1,92 @@
-// Supabase Edge Function: analyze-car-plate
+// Edge Function: get-vtb-cny-rate
 //
-// Провайдер выбирается автоматически по тому, какой ключ настроен:
-//   1) GROQ_API_KEY задан → используется Groq (Qwen 3.6 27B, vision).
-//   2) Иначе, если задан GEMINI_API_KEY → используется Gemini (с google_search).
+// Провайдер выбирается автоматически по тому, какой ключ настроен (по приоритету):
+//   1) ZAI_API_KEY  → Z.AI (GLM-4.6V-Flash/GLM-4.7-Flash), постоянный бесплатный тариф.
+//   2) GROQ_API_KEY → Groq.
+//   3) GEMINI_API_KEY → Gemini, использует встроенный url_context (сам открывает страницу ВТБ).
+//
+// У Z.AI и Groq нет инструмента "открыть страницу в интернете" — поэтому для них
+// страница ВТБ скачивается ЗДЕСЬ, на бэкенде (обычным fetch), очищается от тегов
+// и передаётся модели уже как текст для извлечения курса. Gemini использует
+// собственный url_context и получает страницу самостоятельно.
 //
 // Секреты (Supabase Secrets):
-//   GROQ_API_KEY=gsk_...
-//   GROQ_MODEL=qwen/qwen3.6-27b       (опционально)
-//   GEMINI_API_KEY=...                (опционально, фолбэк)
-//   GEMINI_MODEL=gemini-3.7-flash     (опционально)
+//   ZAI_API_KEY=...             ZAI_MODEL=glm-4.6v-flash        ZAI_API_BASE_URL=... (опц., напр. open.bigmodel.cn)
+//   GROQ_API_KEY=...            GROQ_MODEL=qwen/qwen3.6-27b
+//   GEMINI_API_KEY=...          GEMINI_VTB_MODEL=gemini-3.7-flash   GEMINI_API_BASE_URL=... (опц., напр. qcode.cc)
 //
 // Deploy:
-//   supabase functions deploy analyze-car-plate
+//   supabase functions deploy get-vtb-cny-rate
 
-import { corsHeaders, jsonResponse, readJson, requireUser, isRateLimited } from "../_shared/http.ts";
+import { corsHeaders, jsonResponse, supabaseAdmin, requireUser, isRateLimited } from "../_shared/http.ts";
 
-const RATE_LIMIT = 10;
+const CACHE_MINUTES = 10;
+const RATE_LIMIT = 3;
 const RATE_LIMIT_WINDOW_MIN = 10;
+const VTB_URL = "https://www.vtb.ru/personal/platezhi-i-perevody/obmen-valjuty/yuan/";
 
+const ZAI_DEFAULT_MODEL = "glm-4.6v-flash";
 const GROQ_DEFAULT_MODEL = "qwen/qwen3.6-27b";
 const GEMINI_DEFAULT_MODEL = "gemini-3.7-flash";
+const ZAI_API_BASE_URL = Deno.env.get("ZAI_API_BASE_URL") || "https://api.z.ai/api/paas/v4/chat/completions";
 const GEMINI_API_BASE =
   Deno.env.get("GEMINI_API_BASE_URL") || "https://generativelanguage.googleapis.com/v1beta/models";
 
-const DEPRECATED_GROQ_MODELS = new Set([
-  "meta-llama/llama-4-scout-17b-16e-instruct",
-  "meta-llama/llama-4-maverick-17b-128e-instruct",
-  "llama-3.3-70b-versatile",
-  "llama-3.1-8b-instant",
-  "qwen/qwen3-32b",
-]);
-
-interface OcrResponse {
-  brand: string;
-  model: string;
-  modification: string;
-  vin: string;
-  production_year: number | null;
-  engine_volume_cc: number | null;
-  power_hp: number | null;
-  power_kw: number | null;
-  fuel_type: string;
-  engine_type: string;
-  transmission: string;
-  drive_type: string;
-  confidence: Record<string, number>;
+interface RateAnswer {
+  rate: number | null;
+  direction: "sell" | "buy" | "mid" | null;
+  date: string | null;
+  confidence: number;
+  source_note: string;
 }
 
-function parseDataUrl(image: string): { mimeType: string; data: string } {
-  const match = image.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/s);
-  if (!match) throw new Error("Некорректный формат изображения. Ожидается data:image/...;base64,...");
-  const mimeType = match[1].toLowerCase();
-  const data = match[2];
-  if (!mimeType.startsWith("image/")) throw new Error("Поддерживаются только изображения");
-  if (!data) throw new Error("Пустое изображение");
-  if (data.length > 18_000_000) throw new Error("Изображение слишком большое после сжатия");
-  return { mimeType, data };
-}
-
-/**
- * Достаём JSON из ответа модели. Модель может вернуть:
- *   - чистый JSON,
- *   - JSON в обёртке ```json ... ```,
- *   - JSON с текстом до/после.
- */
-function extractJsonFromText(text: string): unknown | null {
-  if (!text) return null;
+const fetchCbrCny = async (): Promise<number | null> => {
   try {
-    return JSON.parse(text);
+    const url = Deno.env.get("CBR_API_URL") ?? "https://www.cbr.ru/scripts/XML_daily.asp";
+    const res = await fetch(url, { headers: { Accept: "application/xml, text/xml, */*" } });
+    if (!res.ok) return null;
+    const xml = await res.text();
+    const block = xml.match(/<Valute[^>]*>\s*<NumCode>156<\/NumCode>[\s\S]*?<Nominal>(\d+)<\/Nominal>[\s\S]*?<Value>([\d.,]+)<\/Value>/);
+    if (!block) return null;
+    const nominal = Number(block[1]);
+    const value = Number(block[2].replace(",", "."));
+    if (!nominal || !Number.isFinite(value)) return null;
+    return value / nominal;
   } catch {
-    // убираем markdown-обёртку, если есть
-    const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+    return null;
+  }
+};
+
+/** Скачивает страницу ВТБ и грубо очищает от разметки — для провайдеров без своего браузера. */
+async function fetchVtbPageText(): Promise<string> {
+  const res = await fetch(VTB_URL, {
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; AutoChinaCalculator/1.0)" },
+  });
+  if (!res.ok) throw new Error(`Не удалось загрузить страницу ВТБ (HTTP ${res.status})`);
+  const html = await res.text();
+  const text = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) throw new Error("Страница ВТБ загрузилась пустой");
+  return text.slice(0, 20000);
+}
+
+function extractJsonFromText(text: string): RateAnswer | null {
+  try {
+    return JSON.parse(text) as RateAnswer;
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
     try {
-      return JSON.parse(cleaned);
+      return JSON.parse(match[0]) as RateAnswer;
     } catch {
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) return null;
-      try {
-        return JSON.parse(match[0]);
-      } catch {
-        return null;
-      }
+      return null;
     }
   }
-}
-
-function normalizeModelOutput(value: any): OcrResponse {
-  const empty = (v: any) => (typeof v === "string" ? v : "");
-  const AI_NAME_PATTERN = /gemini|gpt-?\d|chatgpt|claude|llama|qwen|deepseek|mistral|copilot|groq/i;
-  const carModel = (v: any) => {
-    const s = empty(v).trim();
-    return AI_NAME_PATTERN.test(s) ? "" : s;
-  };
-  const numOrNull = (v: any) => (typeof v === "number" && Number.isFinite(v) ? v : null);
-  const confidence = value?.confidence ?? {};
-  const clamp = (v: any) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0;
-  };
-  const engineType = ["petrol", "diesel", "hybrid", "phev", "electric"].includes(value?.engine_type)
-    ? value.engine_type
-    : "petrol";
-  const driveType = ["fwd", "rwd", "awd"].includes(value?.drive_type) ? value.drive_type : "awd";
-
-  return {
-    brand: empty(value?.brand),
-    model: carModel(value?.model),
-    modification: empty(value?.modification),
-    vin: empty(value?.vin).toUpperCase().slice(0, 17),
-    production_year: numOrNull(value?.production_year),
-    engine_volume_cc: numOrNull(value?.engine_volume_cc),
-    power_hp: numOrNull(value?.power_hp),
-    power_kw: numOrNull(value?.power_kw),
-    fuel_type: empty(value?.fuel_type),
-    engine_type: engineType,
-    transmission: empty(value?.transmission),
-    drive_type: driveType,
-    confidence: {
-      brand: clamp(confidence.brand),
-      model: clamp(confidence.model),
-      production_year: clamp(confidence.production_year),
-      engine_volume_cc: clamp(confidence.engine_volume_cc),
-      power_hp: clamp(confidence.power_hp),
-      engine_type: clamp(confidence.engine_type),
-    },
-  };
-}
-
-function buildPrompt(withSearchHint: boolean): string {
-  return `Ты — экспертная система распознавания автомобильных заводских шильдиков и VIN-табличек.
-Проанализируй ИЗОБРАЖЕНИЕ, а не угадывай автомобиль по типичным значениям.
-
-Извлеки только то, что действительно видно или однозначно следует из шильдика.
-Особенно внимательно прочитай китайские и латинские символы.
-
-Правила:
-- Не придумывай VIN, год, объем, мощность или модель.
-- Марку и модель возвращай на английском/латиницей (например "Zeekr", "Geely", "Toyota"), даже если на шильдике они написаны иероглифами — переведи или транслитерируй по общепринятому написанию бренда.
-- Поле "model" — это МАРКЕТИНГОВОЕ название модели автомобиля (например "Camry", "Zeekr 001", "RAV4"), а НЕ технический код кузова/двигателя/платформы и НЕ название какой-либо AI-системы или языковой модели. Категорически не подставляй ничего похожего на "gemini", "gpt", "llama", "groq", версию модели ИИ или другой технический код вместо названия автомобиля.
-${withSearchHint ? `- Если потребительское название модели явно не написано на шильдике (частая ситуация для китайских табличек — там часто только внутризаводской индекс кузова вида "整车型号", код двигателя и VIN) — используй инструмент поиска (google_search), чтобы определить настоящую модель по VIN (первые символы — WMI+VDS), по коду кузова/платформы или по производителю. Ищи по VIN, по коду типа "整车型号" вместе с названием завода-изготовителя.\n` : ""}- Если название модели определить не удалось однозначно — верни пустую строку "", не гадай и не оставляй технический код вместо названия.
-- Если значение не видно или не удается надежно определить — верни null для числового поля или пустую строку для текстового.
-- VIN возвращай без пробелов, максимум 17 символов.
-- Для мощности в kW и hp используй значение, явно указанное на табличке; если указана только одна единица, вторую можно вычислить. Для гибридов/электромобилей с раздельно указанной мощностью ДВС и электромотора(ов) — используй суммарную (системную) мощность автомобиля, если она указана отдельно, иначе используй мощность двигателя внутреннего сгорания (не мощность одного из электромоторов) как основную.
-- engine_type — определи МАКСИМАЛЬНО ВНИМАТЕЛЬНО: от этого зависит, по какой формуле считается таможенная пошлина и утильсбор (гибриды/электро считаются иначе, чем обычный ДВС), ошибка здесь стоит реальных денег клиенту. Возможные значения: petrol, diesel, hybrid, phev, electric.
-  Ищи на шильдике одновременно ВСЕ из следующих типов полей (китайские таблички почти всегда содержат несколько из них построчно):
-  * признаки ДВС: "发动机型号" (модель двигателя), "发动机排量" (рабочий объем, см³), "发动机最大净功率" (макс. мощность двигателя), "燃料种类"/"燃油" (вид топлива).
-  * признаки электропривода: "驱动电机型号" (модель тягового электромотора), "驱动电机峰值功率"/"驱动电机额定功率" (мощность электромотора), "动力电池系统额定电压" (напряжение тяговой батареи), "动力电池系统额定容量" (ёмкость батареи, Ah или kWh).
-  Правила определения:
-  * Только признаки ДВС, батарея НЕ упомянута нигде → "petrol" (или "diesel", если явно указано дизельное топливо).
-  * Присутствуют ОДНОВРЕМЕННО и признаки ДВС, и признаки электромотора/батареи на одной табличке → это гибрид или plug-in гибрид, НЕ "electric" и НЕ обычный ДВС. Различай:
-    - "插电式混合动力"/"插电混动"/PHEV в названии модели/модификации, или ёмкость батареи заметно больше (~10+ kWh / указано "可充电") → "phev".
-    - "油电混合"/"混合动力"/HEV без явного указания plug-in, небольшая батарея → "hybrid".
-    - Если явного маркера plug-in/HEV нет, но признаки ДВС и батареи присутствуют одновременно — по умолчанию выбирай "phev" (это чаще встречается на новых китайских премиальных моделях) и снижай confidence.engine_type, а не угадывай молча.
-  * Только признаки электромотора/батареи, "发动机" (двигатель внутреннего сгорания) и объем ДВС полностью ОТСУТСТВУЮТ на табличке → "electric".
-  * confidence.engine_type — отдельная уверенность именно в типе привода (не путай с confidence по мощности/объему). Если на табличке одновременно есть противоречивые/неполные признаки — ставь confidence.engine_type не выше 0.6, даже если ты всё же выбрал конкретное значение, чтобы пользователь обязательно перепроверил вручную.
-- drive_type: fwd, rwd или awd. Если привод не указан, выбери awd только если это однозначно следует из таблички; иначе используй fwd как технический placeholder и confidence 0.
-- confidence — твоя уверенность именно в распознавании каждого ключевого поля, от 0 до 1. Если поле оставлено пустым/null из-за неуверенности — confidence для него должен быть низким (ближе к 0), а не высоким.
-
-Ответь СТРОГО одним JSON-объектом в следующем формате, без markdown-разметки, без \`\`\`json, без пояснений до или после:
-{
-  "brand": string, "model": string, "modification": string, "vin": string,
-  "production_year": number|null, "engine_volume_cc": number|null,
-  "power_hp": number|null, "power_kw": number|null,
-  "fuel_type": string, "engine_type": string, "transmission": string, "drive_type": string,
-  "confidence": { "brand": number, "model": number, "production_year": number, "engine_volume_cc": number, "power_hp": number, "engine_type": number }
-}`;
 }
 
 async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Promise<Response> {
@@ -178,125 +100,144 @@ async function fetchWithRetry(url: string, init: RequestInit, attempts = 3): Pro
   return last!;
 }
 
-/** Groq — Qwen 3.6 27B, vision. */
-async function callGroq(apiKey: string, mimeType: string, data: string) {
-  const model = Deno.env.get("GROQ_MODEL") || GROQ_DEFAULT_MODEL;
+/** Общий текстовый промпт для провайдеров без браузера (Z.AI, Groq) — страница уже передана текстом. */
+function buildTextPrompt(pageText: string, today: string): string {
+  return `Ты извлекаешь банковский курс из текста официальной страницы ВТБ (обмен валюты, юань).
+Сегодня: ${today}.
 
-  if (DEPRECATED_GROQ_MODELS.has(model)) {
-    throw {
-      userMessage: `Модель Groq "${model}" удалена из бесплатного тарифа. Обновите секрет GROQ_MODEL на "qwen/qwen3.6-27b".`,
-      code: "GROQ_MODEL_DEPRECATED",
-      model,
-    };
-  }
+Ниже — очищенный от разметки текст страницы ${VTB_URL}:
+"""
+${pageText}
+"""
 
-  const prompt = buildPrompt(false);
+Твоя задача — найти АКТУАЛЬНЫЙ курс CNY/RUB. Для калькулятора автомобиля клиент ПОКУПАЕТ юани за рубли,
+поэтому нужен именно курс ПРОДАЖИ CNY банком ВТБ.
 
-  const res = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
+Правила:
+1. Не придумывай курс — используй только то, что реально есть в переданном тексте.
+2. Не используй курс ЦБ РФ как замену курсу ВТБ.
+3. Если в тексте есть покупка и продажа — выбери ПРОДАЖУ.
+4. Если курс указан за 10 или 100 CNY, пересчитай в рубли за 1 CNY.
+5. Если в переданном тексте нет подтверждаемого актуального курса ВТБ — верни rate=null.
+6. Верни только JSON, без markdown и пояснений.
+
+Формат ответа (строго один JSON-объект):
+{
+  "rate": число или null,
+  "direction": "sell" | "buy" | "mid" | null,
+  "date": "YYYY-MM-DD" | null,
+  "confidence": число от 0 до 1,
+  "source_note": "краткое описание того, где найден курс в тексте"
+}`;
+}
+
+/** Z.AI — GLM-4.6V-Flash/GLM-4.7-Flash, текстовый режим (страница передана нами). */
+async function callZai(apiKey: string, pageText: string, today: string) {
+  const model = Deno.env.get("ZAI_MODEL") || ZAI_DEFAULT_MODEL;
+  const res = await fetchWithRetry(ZAI_API_BASE_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
       model,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: prompt },
-            { type: "image_url", image_url: { url: `data:${mimeType};base64,${data}` } },
-          ],
-        },
-      ],
-      temperature: 0.2,
-      max_tokens: 1200,
+      messages: [{ role: "user", content: buildTextPrompt(pageText, today) }],
+      temperature: 0.1,
+      max_tokens: 500,
     }),
   });
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = payload?.error?.message || `Z.AI HTTP ${res.status}`;
+    if (res.status === 429 || res.status === 503) {
+      throw { userMessage: "Z.AI сейчас перегружен или превышен лимит запросов. Подождите минуту.", code: "ZAI_OVERLOADED" };
+    }
+    throw { userMessage: `Z.AI: ${msg}`, code: "ZAI_API_ERROR" };
+  }
+  const message = payload?.choices?.[0]?.message;
+  const text = typeof message?.content === "string" ? message.content : (message?.reasoning_content ?? "");
+  const answer = extractJsonFromText(text);
+  if (!answer) throw { userMessage: "Z.AI вернул некорректный JSON", code: "ZAI_INVALID_JSON" };
+  return { answer, provider: "Z.AI", model };
+}
 
+/** Groq — текстовый режим (страница передана нами). */
+async function callGroq(apiKey: string, pageText: string, today: string) {
+  const model = Deno.env.get("GROQ_MODEL") || GROQ_DEFAULT_MODEL;
+  const res = await fetchWithRetry("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: buildTextPrompt(pageText, today) }],
+      temperature: 0.1,
+      max_tokens: 500,
+    }),
+  });
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = payload?.error?.message || `Groq HTTP ${res.status}`;
     if (res.status === 429 || res.status === 503) {
-      throw {
-        userMessage: "Groq сейчас перегружен или превышен лимит запросов. Подождите минуту и попробуйте ещё раз.",
-        code: "GROQ_OVERLOADED",
-        model,
-      };
+      throw { userMessage: "Groq сейчас перегружен или превышен лимит запросов. Подождите минуту.", code: "GROQ_OVERLOADED" };
     }
-    if (res.status === 404 || /does not exist|do not have access/i.test(msg)) {
-      throw {
-        userMessage: `Groq: модель "${model}" недоступна. Обновите секрет GROQ_MODEL на "qwen/qwen3.6-27b".`,
-        code: "GROQ_MODEL_NOT_FOUND",
-        model,
-      };
-    }
-    if (payload?.error?.failed_generation) {
-      console.error("Groq failed_generation", String(payload.error.failed_generation).slice(0, 2000));
-    }
-    throw { userMessage: `Groq: ${msg}`, code: "GROQ_API_ERROR", model };
+    throw { userMessage: `Groq: ${msg}`, code: "GROQ_API_ERROR" };
   }
-
   const message = payload?.choices?.[0]?.message;
-  // Reasoning-модели могут положить ответ в reasoning, а content оставить пустым.
-  let text: string | undefined = typeof message?.content === "string" ? message.content : undefined;
-  if ((!text || !text.trim()) && typeof message?.reasoning === "string") {
-    text = message.reasoning;
-  }
-  if (!text || !text.trim()) {
-    console.error("Groq empty content", JSON.stringify(payload).slice(0, 2000));
-    throw { userMessage: "Groq не вернул результат распознавания", code: "GROQ_EMPTY_RESPONSE", model };
-  }
-
-  const parsed = extractJsonFromText(text);
-  if (!parsed) {
-    console.error("Groq returned invalid JSON", text.slice(0, 4000));
-    throw { userMessage: "Groq вернул некорректный JSON", code: "GROQ_INVALID_JSON", model };
-  }
-  return { parsed, provider: "Groq", model };
+  const text = typeof message?.content === "string" ? message.content : (message?.reasoning ?? "");
+  const answer = extractJsonFromText(text);
+  if (!answer) throw { userMessage: "Groq вернул некорректный JSON", code: "GROQ_INVALID_JSON" };
+  return { answer, provider: "Groq", model };
 }
 
-/** Gemini — фолбэк с google_search. */
-async function callGemini(apiKey: string, mimeType: string, data: string) {
-  const model = Deno.env.get("GEMINI_MODEL") || GEMINI_DEFAULT_MODEL;
-  const prompt = buildPrompt(true);
+/** Gemini — использует собственный url_context, страницу сам не получает от нас. */
+async function callGemini(apiKey: string, today: string) {
+  const model = Deno.env.get("GEMINI_VTB_MODEL") ?? GEMINI_DEFAULT_MODEL;
+  const url = `${GEMINI_API_BASE}/${encodeURIComponent(model)}:generateContent`;
 
-  const res = await fetchWithRetry(`${GEMINI_API_BASE}/${encodeURIComponent(model)}:generateContent`, {
+  const prompt = `Ты извлекаешь банковский курс из официальной страницы ВТБ.
+Сегодня: ${today}.
+
+Источник данных — ТОЛЬКО официальная публичная страница ВТБ:
+${VTB_URL}
+
+Открой её через URL Context и найди АКТУАЛЬНЫЙ курс CNY/RUB.
+Для калькулятора автомобиля клиент ПОКУПАЕТ юани за рубли, поэтому нужен именно курс ПРОДАЖИ CNY банком ВТБ.
+
+Правила:
+1. Не придумывай курс.
+2. Не используй курс ЦБ РФ как замену курсу ВТБ.
+3. Если на странице есть покупка и продажа — выбери ПРОДАЖУ.
+4. Если курс указан за 10 или 100 CNY, пересчитай в рубли за 1 CNY.
+5. Если на странице нет подтверждаемого актуального курса ВТБ — верни rate=null.
+6. Не используй другие сайты и не используй Google Search grounding.
+7. Ответь СТРОГО одним JSON-объектом, без markdown, без пояснений:
+{
+  "rate": число или null,
+  "direction": "sell" | "buy" | "mid" | null,
+  "date": "YYYY-MM-DD" | null,
+  "confidence": число от 0 до 1,
+  "source_note": "краткое описание того, где найден курс"
+}`;
+
+  const res = await fetchWithRetry(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ inline_data: { mime_type: mimeType, data } }, { text: prompt }] }],
-      tools: [{ google_search: {} }],
-      generationConfig: { responseMimeType: "application/json" },
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      tools: [{ url_context: {} }],
     }),
   });
-
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) {
     const msg = payload?.error?.message || `Gemini HTTP ${res.status}`;
     if (res.status === 429 || res.status === 503) {
-      throw {
-        userMessage: "Gemini (бесплатный тариф) сейчас перегружен или превышен лимит запросов. Подождите минуту и попробуйте ещё раз.",
-        code: "GEMINI_OVERLOADED",
-        model,
-      };
+      throw { userMessage: "Gemini (бесплатный тариф) сейчас перегружен или превышен лимит запросов. Подождите минуту.", code: "GEMINI_OVERLOADED" };
     }
-    throw { userMessage: `Gemini: ${msg}`, code: "GEMINI_API_ERROR", model };
+    throw { userMessage: `Gemini: ${msg}`, code: "GEMINI_API_ERROR" };
   }
-
   const parts = payload?.candidates?.[0]?.content?.parts;
-  const text = Array.isArray(parts)
-    ? parts.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("\n").trim()
-    : "";
-  if (!text) {
-    throw { userMessage: "Gemini не вернул результат распознавания", code: "GEMINI_EMPTY_RESPONSE", model };
-  }
-  const parsed = extractJsonFromText(text);
-  if (!parsed) {
-    console.error("Gemini returned invalid JSON", text.slice(0, 4000));
-    throw { userMessage: "Gemini вернул некорректный JSON", code: "GEMINI_INVALID_JSON", model };
-  }
-  return { parsed, provider: "Gemini", model };
+  const text = Array.isArray(parts) ? parts.map((p: any) => (typeof p?.text === "string" ? p.text : "")).join("\n").trim() : "";
+  const answer = extractJsonFromText(text);
+  if (!answer) throw { userMessage: "Gemini вернул некорректный JSON", code: "GEMINI_INVALID_JSON" };
+  return { answer, provider: "Gemini", model };
 }
 
 Deno.serve(async (req) => {
@@ -306,51 +247,111 @@ Deno.serve(async (req) => {
     const user = await requireUser(req);
     if (!user) return jsonResponse({ error: "Требуется авторизация" }, 401);
 
-    if (await isRateLimited(user.id, "analyze-car-plate", RATE_LIMIT, RATE_LIMIT_WINDOW_MIN)) {
-      return jsonResponse({ error: "Слишком много запросов распознавания. Попробуйте через несколько минут." }, 429);
+    const sb = supabaseAdmin();
+
+    // Кэш — не дёргаем провайдера чаще раза в 10 минут.
+    const cacheSince = new Date(Date.now() - CACHE_MINUTES * 60_000).toISOString();
+    const { data: cached } = await sb
+      .from("exchange_rates")
+      .select("rate, fetched_at")
+      .eq("currency", "CNY")
+      .eq("source", "VTB")
+      .gte("fetched_at", cacheSince)
+      .order("fetched_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (cached) {
+      return jsonResponse({
+        rate: String(cached.rate),
+        source: "VTB",
+        fetched_at: cached.fetched_at,
+        note: "Курс ВТБ (кэш, обновляется не чаще раза в 10 минут)",
+        source_url: VTB_URL,
+        cache: true,
+      });
     }
 
-    const { image } = (await readJson(req)) as { image?: string };
-    if (!image) return jsonResponse({ error: "image is required" }, 400);
+    if (await isRateLimited(user.id, "get-vtb-cny-rate", RATE_LIMIT, RATE_LIMIT_WINDOW_MIN)) {
+      return jsonResponse({ error: "Слишком много запросов курса ВТБ. Попробуйте через несколько минут." }, 429);
+    }
 
+    const zaiKey = Deno.env.get("ZAI_API_KEY");
     const groqKey = Deno.env.get("GROQ_API_KEY");
     const geminiKey = Deno.env.get("GEMINI_API_KEY");
-    if (!groqKey && !geminiKey) {
-      return jsonResponse(
-        {
-          error: "Не настроен ни GROQ_API_KEY, ни GEMINI_API_KEY в Supabase Secrets",
-          code: "NO_PROVIDER_CONFIGURED",
-        },
-        503,
-      );
+    if (!zaiKey && !groqKey && !geminiKey) {
+      return jsonResponse({
+        error: "Не настроен ни один из ключей (ZAI_API_KEY / GROQ_API_KEY / GEMINI_API_KEY) в Supabase Secrets",
+        code: "NO_PROVIDER_CONFIGURED",
+      }, 503);
     }
 
-    const { mimeType, data } = parseDataUrl(image);
+    const today = new Date().toISOString().slice(0, 10);
 
-    let result: { parsed: unknown; provider: string; model: string };
+    let result: { answer: RateAnswer; provider: string; model: string };
     try {
-      result = groqKey ? await callGroq(groqKey, mimeType, data) : await callGemini(geminiKey!, mimeType, data);
+      if (zaiKey) {
+        result = await callZai(zaiKey, await fetchVtbPageText(), today);
+      } else if (groqKey) {
+        result = await callGroq(groqKey, await fetchVtbPageText(), today);
+      } else {
+        result = await callGemini(geminiKey!, today);
+      }
     } catch (e: any) {
-      console.error("analyze-car-plate provider error", e);
-      return jsonResponse(
-        {
-          error: e?.userMessage ?? "Ошибка распознавания",
-          code: e?.code ?? "PROVIDER_ERROR",
-          model: e?.model,
-        },
-        502,
-      );
+      console.error("get-vtb-cny-rate provider error", e);
+      return jsonResponse({
+        error: e?.userMessage ?? "Не удалось получить курс ВТБ",
+        code: e?.code ?? "PROVIDER_ERROR",
+      }, 502);
     }
 
-    return jsonResponse({ ...normalizeModelOutput(result.parsed), provider: result.provider, model: result.model });
+    const { answer, provider, model } = result;
+    const rate = Number(answer.rate);
+    if (answer.rate == null || !Number.isFinite(rate) || rate <= 0) {
+      return jsonResponse({
+        error: "На официальной странице ВТБ не найден подтверждаемый курс продажи CNY. Введите курс вручную или повторите попытку позже.",
+        code: "VTB_RATE_NOT_FOUND",
+        note: answer.source_note,
+        source_url: VTB_URL,
+        provider,
+        model,
+      }, 502);
+    }
+
+    // Проверка по курсу ЦБ РФ — страховка от галлюцинации/масштабирования (10/100 юаней вместо 1).
+    const cbr = await fetchCbrCny();
+    if (cbr && Math.abs(rate - cbr) / cbr > 0.15) {
+      return jsonResponse({
+        error: `Найденный курс ${rate} ₽ отклоняется от курса ЦБ РФ (${cbr} ₽) более чем на 15% — значение отклонено.`,
+        code: "VTB_RATE_VALIDATION_FAILED",
+        found_rate: rate,
+        cbr_rate: cbr,
+        note: answer.source_note,
+        source_url: VTB_URL,
+        provider,
+      }, 502);
+    }
+
+    const fetched_at = new Date().toISOString();
+    await sb.from("exchange_rates").insert({ currency: "CNY", rate, source: "VTB", fetched_at, is_manual: false });
+
+    return jsonResponse({
+      rate: String(rate),
+      source: "VTB",
+      fetched_at,
+      note: `ВТБ → ${provider} (${answer.direction ?? "unknown"}, уверенность ${(Math.max(0, Math.min(1, Number(answer.confidence) || 0)) * 100).toFixed(0)}%): ${answer.source_note}`,
+      source_url: VTB_URL,
+      cbr_rate: cbr,
+      provider,
+      model,
+      cache: false,
+    });
   } catch (e) {
-    console.error("analyze-car-plate error", e);
-    return jsonResponse(
-      {
-        error: e instanceof Error ? e.message : "Не удалось распознать данные",
-        code: "OCR_INTERNAL_ERROR",
-      },
-      500,
-    );
+    return jsonResponse({
+      error: "Не удалось получить курс ВТБ. Введите курс вручную или повторите попытку.",
+      code: "VTB_UNEXPECTED_ERROR",
+      detail: String(e),
+      source_url: VTB_URL,
+    }, 500);
   }
 });
