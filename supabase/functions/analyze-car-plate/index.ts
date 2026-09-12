@@ -137,9 +137,43 @@ OCR-текст (может содержать ошибки): ${ocrText || "не�
 Марка и модель — автомобиль, не название AI-модели. Для китайских полей используй транслитерацию. Не придумывай отсутствующие значения. Если одновременно есть 发动机/排量 и батарея/驱动电机 — hybrid или phev; только батарея без ДВС — electric.`;
 }
 
-function extractJson(textValue: string): any | null {
-  const cleaned = textValue.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
-  try { return JSON.parse(cleaned); } catch { const m = cleaned.match(/\{[\s\S]*\}/); try { return m ? JSON.parse(m[0]) : null; } catch { return null; } }
+function contentToText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (typeof part === "string") return part;
+      if (part && typeof part === "object") {
+        const item = part as Record<string, unknown>;
+        return typeof item.text === "string" ? item.text : typeof item.content === "string" ? item.content : "";
+      }
+      return "";
+    }).filter(Boolean).join("\n");
+  }
+  if (content && typeof content === "object") {
+    const item = content as Record<string, unknown>;
+    return contentToText(item.text ?? item.content ?? item.reasoning ?? "");
+  }
+  return "";
+}
+
+function extractJson(value: unknown): any | null {
+  let textValue = contentToText(value)
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<analysis>[\s\S]*?<\/analysis>/gi, "")
+    .trim();
+
+  textValue = textValue
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  try { return JSON.parse(textValue); } catch { /* JSON may be surrounded by prose */ }
+
+  const start = textValue.indexOf("{");
+  const end = textValue.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try { return JSON.parse(textValue.slice(start, end + 1)); } catch { return null; }
 }
 
 async function callOpenRouter(image: string, ocrText: string): Promise<{ parsed: OcrResponse; provider: Provider; model: string }> {
@@ -155,9 +189,13 @@ async function callOpenRouter(image: string, ocrText: string): Promise<{ parsed:
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) { last = { code: `OPENROUTER_HTTP_${res.status}`, userMessage: payload?.error?.message || `OpenRouter HTTP ${res.status}` }; continue; }
-      const output = payload?.choices?.[0]?.message?.content;
-      const parsed = extractJson(typeof output === "string" ? output : "");
-      if (!parsed) { last = { code: "OPENROUTER_INVALID_JSON", userMessage: "OpenRouter вернул некорректный JSON" }; continue; }
+      const message = payload?.choices?.[0]?.message;
+      const output = message?.content ?? message?.reasoning ?? "";
+      const parsed = extractJson(output);
+      if (!parsed || typeof parsed !== "object") {
+        last = { code: "OPENROUTER_INVALID_JSON", userMessage: "OpenRouter ответил, но не вернул распознаваемый JSON" };
+        continue;
+      }
       return { parsed: normalize(parsed), provider: "OpenRouter", model };
     } catch (e) { last = e; }
   }
