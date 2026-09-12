@@ -425,7 +425,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    return jsonResponse({ ...normalizeModelOutput(result.parsed), provider: result.provider, model: result.model, _debug_build: "2026-09-12-filter-v2" });
+    return jsonResponse({ ...normalizeModelOutput(result.parsed), provider: result.provider, ai_model: result.model });
   } catch (e) {
     console.error("analyze-car-plate error", e);
     return jsonResponse(
