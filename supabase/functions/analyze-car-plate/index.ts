@@ -112,11 +112,17 @@ function parsePaddleResult(payload: any): OcrResponse {
   const hasBattery = /电池|驱动电机|混合动力|油电|插电|phev|hev/i.test(all);
   const hasIce = /发动机|排量|燃油|汽油|柴油|petrol|diesel/i.test(all);
   const type: EngineType = hasBattery && hasIce ? (/插电|phev/i.test(all) ? "phev" : "hybrid") : hasBattery ? "electric" : /柴油|diesel/i.test(all) ? "diesel" : "petrol";
+  // "первая строка OCR" часто оказывается юридическим названием завода-изготовителя
+  // (например "中国 浙江吉利汽车有限公司 制造"), а не маркой автомобиля. Если на
+  // табличке есть явная метка "品牌" (марка) — берём текст после неё, это надежнее.
+  const labeledBrand = find([/品牌[：:\s]*([A-Za-z\u4e00-\u9fa5]{1,20}(?:\s*[（(][A-Za-z ]+[)）])?)/]);
+  const fallbackBrandLine = lines.find((l) => !/有限公司|制造|集团|生产厂/.test(l)) ?? lines[0] ?? "";
+  const brand = labeledBrand || fallbackBrandLine;
   return normalize({
-    brand: lines[0] ?? "", model: lines[1] ?? "", vin, production_year: year,
+    brand, model: lines[1] ?? "", vin, production_year: year,
     engine_volume_cc: volume && volume < 20 ? Math.round(volume * 1000) : volume,
     power_kw: kw, power_hp: hp ?? (kw ? Math.round(kw * 1.35962) : null), engine_type: type,
-    confidence: { brand: lines[0] ? 0.55 : 0, model: lines[1] ? 0.45 : 0, production_year: year ? 0.7 : 0,
+    confidence: { brand: labeledBrand ? 0.75 : brand ? 0.5 : 0, model: lines[1] ? 0.45 : 0, production_year: year ? 0.7 : 0,
       engine_volume_cc: volume ? 0.75 : 0, power_hp: hp || kw ? 0.7 : 0, engine_type: hasBattery || hasIce ? 0.65 : 0 },
   });
 }
@@ -203,9 +209,18 @@ async function callOpenRouter(image: string, ocrText: string): Promise<{ parsed:
 }
 
 function needsFallback(result: OcrResponse): boolean {
-  const c = result.confidence;
-  return !result.brand || !result.model || (!result.vin && !result.production_year && !result.engine_volume_cc) ||
-    [c.brand, c.model, c.production_year, c.engine_volume_cc, c.power_hp, c.engine_type].some((x) => x > 0 && x < 0.7);
+  // Раньше здесь сравнивали confidence с порогом 0.7 — но PaddleOCR-эвристика
+  // (parsePaddleResult) намеренно ставит 0.45-0.65 для brand/model/engine_type
+  // ВСЕГДА, даже при верном распознавании. Из-за этого AI-фолбэк срабатывал
+  // практически на каждый запрос, и PaddleOCR не снижал расход ИИ вообще.
+  //
+  // Новая логика: доверяем PaddleOCR, если он нашел И правдоподобные бренд+модель,
+  // И хотя бы один технический идентификатор (VIN, год или объем двигателя) —
+  // этого достаточно для расчета. OpenRouter вызываем только когда PaddleOCR
+  // реально не справился (пустой/нечитаемый текст с фото).
+  const hasBrandModel = Boolean(result.brand && result.model);
+  const hasIdentifier = Boolean(result.vin || result.production_year || result.engine_volume_cc);
+  return !hasBrandModel || !hasIdentifier;
 }
 
 Deno.serve(async (req) => {
