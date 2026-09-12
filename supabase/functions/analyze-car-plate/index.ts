@@ -216,7 +216,7 @@ async function callZai(apiKey: string, mimeType: string, data: string) {
         },
       ],
       temperature: 0.2,
-      max_tokens: 1200,
+      max_tokens: 2500,
     }),
   });
 
@@ -237,6 +237,7 @@ async function callZai(apiKey: string, mimeType: string, data: string) {
   }
 
   const message = payload?.choices?.[0]?.message;
+  const finishReason = payload?.choices?.[0]?.finish_reason;
   let text: string | undefined = typeof message?.content === "string" ? message.content : undefined;
   if ((!text || !text.trim()) && typeof message?.reasoning_content === "string") {
     text = message.reasoning_content;
@@ -248,8 +249,9 @@ async function callZai(apiKey: string, mimeType: string, data: string) {
 
   const parsed = extractJsonFromText(text);
   if (!parsed) {
-    console.error("Z.AI returned invalid JSON", text.slice(0, 4000));
-    throw { userMessage: "Z.AI вернул некорректный JSON", code: "ZAI_INVALID_JSON", model };
+    console.error("Z.AI returned invalid JSON", { finishReason, text: text.slice(0, 4000) });
+    const truncatedHint = finishReason === "length" ? " (ответ обрезан лимитом длины)" : "";
+    throw { userMessage: `Z.AI вернул некорректный JSON${truncatedHint}`, code: "ZAI_INVALID_JSON", model };
   }
   return { parsed, provider: "Z.AI", model };
 }
