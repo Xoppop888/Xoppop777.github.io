@@ -112,17 +112,11 @@ function parsePaddleResult(payload: any): OcrResponse {
   const hasBattery = /电池|驱动电机|混合动力|油电|插电|phev|hev/i.test(all);
   const hasIce = /发动机|排量|燃油|汽油|柴油|petrol|diesel/i.test(all);
   const type: EngineType = hasBattery && hasIce ? (/插电|phev/i.test(all) ? "phev" : "hybrid") : hasBattery ? "electric" : /柴油|diesel/i.test(all) ? "diesel" : "petrol";
-  // "первая строка OCR" часто оказывается юридическим названием завода-изготовителя
-  // (например "中国 浙江吉利汽车有限公司 制造"), а не маркой автомобиля. Если на
-  // табличке есть явная метка "品牌" (марка) — берём текст после неё, это надежнее.
-  const labeledBrand = find([/品牌[：:\s]*([A-Za-z\u4e00-\u9fa5]{1,20}(?:\s*[（(][A-Za-z ]+[)）])?)/]);
-  const fallbackBrandLine = lines.find((l) => !/有限公司|制造|集团|生产厂/.test(l)) ?? lines[0] ?? "";
-  const brand = labeledBrand || fallbackBrandLine;
   return normalize({
-    brand, model: lines[1] ?? "", vin, production_year: year,
+    brand: lines[0] ?? "", model: lines[1] ?? "", vin, production_year: year,
     engine_volume_cc: volume && volume < 20 ? Math.round(volume * 1000) : volume,
     power_kw: kw, power_hp: hp ?? (kw ? Math.round(kw * 1.35962) : null), engine_type: type,
-    confidence: { brand: labeledBrand ? 0.75 : brand ? 0.5 : 0, model: lines[1] ? 0.45 : 0, production_year: year ? 0.7 : 0,
+    confidence: { brand: lines[0] ? 0.55 : 0, model: lines[1] ? 0.45 : 0, production_year: year ? 0.7 : 0,
       engine_volume_cc: volume ? 0.75 : 0, power_hp: hp || kw ? 0.7 : 0, engine_type: hasBattery || hasIce ? 0.65 : 0 },
   });
 }
@@ -191,15 +185,26 @@ async function callOpenRouter(image: string, ocrText: string): Promise<{ parsed:
       const res = await fetchTimeout("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { ...jsonHeaders, Authorization: `Bearer ${OPENROUTER_KEY}`, "HTTP-Referer": "https://autochina-calculator.local", "X-Title": "Auto China Calculator" },
-        body: JSON.stringify({ model, messages: [{ role: "user", content: [{ type: "text", text: buildPrompt(ocrText) }, { type: "image_url", image_url: { url: image } }] }], temperature: 0, max_tokens: 800 }),
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: [{ type: "text", text: buildPrompt(ocrText) }, { type: "image_url", image_url: { url: image } }] }],
+          temperature: 0,
+          max_tokens: 800,
+          response_format: { type: "json_object" },
+        }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) { last = { code: `OPENROUTER_HTTP_${res.status}`, userMessage: payload?.error?.message || `OpenRouter HTTP ${res.status}` }; continue; }
       const message = payload?.choices?.[0]?.message;
-      const output = message?.content ?? message?.reasoning ?? "";
+      // Некоторые reasoning-модели возвращают content="", а JSON кладут в reasoning.
+      // Оператор ?? не помогает для пустой строки, поэтому объединяем оба поля.
+      const output = [message?.content, message?.reasoning]
+        .map((value) => contentToText(value))
+        .filter(Boolean)
+        .join("\n");
       const parsed = extractJson(output);
       if (!parsed || typeof parsed !== "object") {
-        last = { code: "OPENROUTER_INVALID_JSON", userMessage: "OpenRouter ответил, но не вернул распознаваемый JSON" };
+        last = { code: "OPENROUTER_INVALID_JSON", userMessage: `OpenRouter не вернул JSON (model=${model}, finish_reason=${payload?.choices?.[0]?.finish_reason ?? "unknown"})` };
         continue;
       }
       return { parsed: normalize(parsed), provider: "OpenRouter", model };
@@ -209,15 +214,8 @@ async function callOpenRouter(image: string, ocrText: string): Promise<{ parsed:
 }
 
 function needsFallback(result: OcrResponse): boolean {
-  // Раньше здесь сравнивали confidence с порогом 0.7 — но PaddleOCR-эвристика
-  // (parsePaddleResult) намеренно ставит 0.45-0.65 для brand/model/engine_type
-  // ВСЕГДА, даже при верном распознавании. Из-за этого AI-фолбэк срабатывал
-  // практически на каждый запрос, и PaddleOCR не снижал расход ИИ вообще.
-  //
-  // Новая логика: доверяем PaddleOCR, если он нашел И правдоподобные бренд+модель,
-  // И хотя бы один технический идентификатор (VIN, год или объем двигателя) —
-  // этого достаточно для расчета. OpenRouter вызываем только когда PaddleOCR
-  // реально не справился (пустой/нечитаемый текст с фото).
+  // Не сравниваем эвристические confidence PaddleOCR с порогом: для brand/model
+  // они намеренно занижены и не отражают фактическую полноту распознавания.
   const hasBrandModel = Boolean(result.brand && result.model);
   const hasIdentifier = Boolean(result.vin || result.production_year || result.engine_volume_cc);
   return !hasBrandModel || !hasIdentifier;
