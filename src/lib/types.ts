@@ -13,14 +13,16 @@ export interface CarData {
   modification: string;
   vin: string;
   production_year: number | null;
+  /** месяц изготовления с шильдика, 1-12; null — на шильдике не прочитан */
+  production_month: number | null;
   engine_volume_cc: number | null;
   power_hp: number | null;
   power_kw: number | null;
-  engine_type: EngineType;
+  engine_type: EngineType | null;
   fuel_type: string;
   eco_class: string;
   transmission: string;
-  drive_type: DriveType;
+  drive_type: DriveType | null;
   vehicle_type: VehicleType;
   importer_type: ImporterType;
 }
@@ -29,6 +31,7 @@ export interface OcrConfidence {
   brand: number;
   model: number;
   production_year: number;
+  production_month: number;
   engine_volume_cc: number;
   power_hp: number;
   engine_type: number;
@@ -119,6 +122,11 @@ export interface CustomsBreakdown {
   vat_reason: string;
   applied_rules: AppliedRule[];
   rule_version: string;
+  /** возраст в полных годах, по которому подобраны правила */
+  vehicle_age_years?: number;
+  /** возраст точно не известен (нет месяца изготовления) — взят более дорогой вариант */
+  age_assumed?: boolean;
+  age_note?: string;
 }
 
 export interface ExpenseItem {
@@ -222,14 +230,15 @@ export const emptyCar = (): CarData => ({
   modification: "",
   vin: "",
   production_year: null,
+  production_month: null,
   engine_volume_cc: null,
   power_hp: null,
   power_kw: null,
-  engine_type: "petrol",
-  fuel_type: "АИ-95",
+  engine_type: null,
+  fuel_type: "",
   eco_class: "",
-  transmission: "Автомат",
-  drive_type: "awd",
+  transmission: "",
+  drive_type: null,
   vehicle_type: "passenger",
   importer_type: "physical",
 });
@@ -252,6 +261,18 @@ export const VEHICLE_LABELS: Record<VehicleType, string> = {
   passenger: "Легковой автомобиль",
   electric: "Электромобиль",
   other: "Другое",
+};
+
+export const MONTH_LABELS: Record<number, string> = {
+  1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель", 5: "Май", 6: "Июнь",
+  7: "Июль", 8: "Август", 9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
+};
+
+/** «Март 2024 г.» / «2024 г. (месяц не указан)» / «—» */
+export const productionLabel = (car: Pick<CarData, "production_year" | "production_month">): string => {
+  if (!car.production_year) return "—";
+  if (!car.production_month) return `${car.production_year} г. (месяц не указан)`;
+  return `${MONTH_LABELS[car.production_month]} ${car.production_year} г.`;
 };
 
 export const IMPORTER_LABELS: Record<ImporterType, string> = {

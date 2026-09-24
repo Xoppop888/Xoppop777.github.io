@@ -365,3 +365,23 @@ grant select, insert on public.api_rate_limits to authenticated;
 grant select, insert, update, delete on public.recognition_cache to authenticated;
 
 grant usage, select on all sequences in schema public to authenticated;
+
+-- ---------- recognition_metrics (сравнение провайдеров распознавания) ----------
+-- см. supabase/migrations/20260924_recognition_metrics.sql
+create table if not exists public.recognition_metrics (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  user_id uuid references auth.users(id) on delete set null,
+  image_sha256 text check (image_sha256 ~ '^[a-f0-9]{64}$'),
+  provider text not null check (provider in ('PaddleOCR','OpenRouter')),
+  model text,
+  fallback_used boolean not null default false,
+  manual_required boolean not null default false,
+  paddleocr_ms integer not null default 0,
+  openrouter_ms integer not null default 0,
+  fields_recognized smallint not null default 0
+);
+alter table public.recognition_metrics enable row level security;
+drop policy if exists recognition_metrics_none on public.recognition_metrics;
+create policy recognition_metrics_none on public.recognition_metrics for all using (false) with check (false);
+create index if not exists recognition_metrics_created_idx on public.recognition_metrics(created_at desc);

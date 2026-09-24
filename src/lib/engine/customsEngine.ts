@@ -16,6 +16,8 @@ Decimal.set({ precision: 28, rounding: Decimal.ROUND_HALF_UP });
 
 export interface CustomsArgs {
   production_year: number;
+  /** месяц изготовления с шильдика (1-12); null — неизвестен */
+  production_month: number | null;
   engine_volume_cc: number | null;
   power_hp: number | null;
   power_kw: number | null;
@@ -40,9 +42,26 @@ interface MatchCtx {
   customs_value: Decimal;
 }
 
-const vehicleAge = (production_year: number, date?: string): number => {
+/**
+ * Возраст в полных годах от даты изготовления с шильдика до даты расчёта.
+ * Границы возраста (3 и 5 лет) меняют формулу пошлины и коэффициент утильсбора,
+ * поэтому месяц учитывается, а не только год.
+ */
+export const vehicleAgeYears = (production_year: number, production_month: number, date?: string): number => {
   const now = date ? new Date(date) : new Date();
-  return Math.max(0, now.getFullYear() - production_year);
+  const months = (now.getFullYear() - production_year) * 12 + (now.getMonth() + 1 - production_month);
+  return Math.max(0, Math.floor(months / 12));
+};
+
+/**
+ * Диапазон возможного возраста, когда месяц изготовления не прочитан с шильдика:
+ * от декабря (самая молодая машина) до января (самая старая).
+ */
+const ageCandidates = (production_year: number, production_month: number | null, date?: string): number[] => {
+  if (production_month) return [vehicleAgeYears(production_year, production_month, date)];
+  const youngest = vehicleAgeYears(production_year, 12, date);
+  const oldest = vehicleAgeYears(production_year, 1, date);
+  return youngest === oldest ? [youngest] : [youngest, oldest];
 };
 
 const matches = (r: RuleDef, ctx: MatchCtx, date: Date): boolean => {
@@ -135,10 +154,28 @@ const applyFormula = (r: RuleDef, ctx: MatchCtx, eurRate: Decimal): Decimal => {
  * При одинаковых входах, курсах и версии правил результат всегда одинаков.
  */
 export function calculateCustoms(a: CustomsArgs): CustomsBreakdown {
+  const candidates = ageCandidates(a.production_year, a.production_month, a.calc_date);
+  const variants = candidates.map((age) => calculateForAge(a, age));
+  // Месяц изготовления не прочитан — показываем более дорогой из возможных вариантов,
+  // чтобы клиент не получил заниженную оценку платежей.
+  const worst = variants.reduce((a1, b1) => (D(b1.total_customs).gt(D(a1.total_customs)) ? b1 : a1));
+  if (variants.length === 1) return worst;
+
+  const years = candidates.slice().sort((x, y) => x - y);
+  return {
+    ...worst,
+    age_assumed: true,
+    age_note:
+      `Месяц изготовления не указан: возраст может быть ${years[0]} или ${years[years.length - 1]} лет. ` +
+      `Расчёт сделан по более дорогому варианту (${worst.vehicle_age_years} лет). ` +
+      `Укажите месяц с шильдика, чтобы уточнить сумму.`,
+  };
+}
+
+function calculateForAge(a: CustomsArgs, age: number): CustomsBreakdown {
   const date = a.calc_date ? new Date(a.calc_date) : new Date();
   const eur = D(a.eur_rate);
   const customs_value = D(a.invoice_price_cny).times(D(a.cny_rate_effective));
-  const age = vehicleAge(a.production_year, a.calc_date);
   const ctx: MatchCtx = {
     vehicle_type: a.vehicle_type,
     importer_type: a.importer_type,
@@ -261,6 +298,9 @@ export function calculateCustoms(a: CustomsArgs): CustomsBreakdown {
     vat_reason,
     applied_rules: applied,
     rule_version: a.rule_version,
+    vehicle_age_years: age,
+    age_assumed: false,
+    age_note: "",
   };
 }
 
@@ -315,8 +355,16 @@ export function computeFullCalculation(
     .plus(D(input.shipping.russia_rub))
     .plus(D(input.shipping.other_rub));
 
+  if (input.car.production_year === null) {
+    throw new Error("Не указан год изготовления — расчёт невозможен");
+  }
+  if (input.car.engine_type === null) {
+    throw new Error("Не указан тип двигателя — расчёт невозможен");
+  }
+
   const breakdown = calculateCustoms({
-    production_year: input.car.production_year ?? new Date().getFullYear(),
+    production_year: input.car.production_year,
+    production_month: input.car.production_month,
     engine_volume_cc: input.car.engine_volume_cc,
     power_hp: input.car.power_hp,
     power_kw: input.car.power_kw,
@@ -369,6 +417,7 @@ export function validateForCalculation(car: CarData, china_price_cny: string, br
   const missing: string[] = [];
   if (!D(china_price_cny).gt(0)) missing.push("цена автомобиля в Китае");
   if (!car.production_year) missing.push("год выпуска");
+  if (!car.engine_type) missing.push("тип двигателя");
   if (car.engine_type !== "electric" && !car.engine_volume_cc) missing.push("объем двигателя");
   if (!car.power_hp) missing.push("мощность");
   if (broker_cost_rub === "") missing.push("стоимость услуг брокера");

@@ -4,7 +4,7 @@ import { ArrowLeft, CalendarDays, Landmark, Truck, Percent, Coins, FilePlus2, Fl
 import { db } from "../lib/db";
 import type { CalculationSnapshot } from "../lib/types";
 import type { FullCalculation } from "../lib/engine/customsEngine";
-import { ENGINE_LABELS, DRIVE_LABELS, IMPORTER_LABELS, VEHICLE_LABELS } from "../lib/types";
+import { ENGINE_LABELS, DRIVE_LABELS, IMPORTER_LABELS, VEHICLE_LABELS, productionLabel } from "../lib/types";
 import { fmtRub, fmtRub2, fmtCny, fmtRate, fmtDate, fmtDateTime, D } from "../lib/money";
 import { Skeleton, Badge } from "../components/ui";
 import PdfButton from "../components/PdfButton";
@@ -94,11 +94,11 @@ export default function CalculationDetailPage() {
             </h1>
             <p className="text-[13.5px] text-ink-300 font-medium mt-2">
               {[
-                car.production_year ? String(car.production_year) : null,
+                productionLabel(car),
                 car.engine_volume_cc ? `${car.engine_volume_cc} см³` : "электро",
                 car.power_hp ? `${car.power_hp} л.с.` : null,
-                ENGINE_LABELS[car.engine_type],
-                DRIVE_LABELS[car.drive_type],
+                car.engine_type ? ENGINE_LABELS[car.engine_type] : null,
+                car.drive_type ? DRIVE_LABELS[car.drive_type] : null,
                 IMPORTER_LABELS[car.importer_type],
               ].filter(Boolean).join(" • ")}
             </p>

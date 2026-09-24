@@ -33,6 +33,22 @@ def decode_image(value: str) -> np.ndarray:
     return np.asarray(image)
 
 
+def to_box(poly) -> list[float] | None:
+    """Полигон PaddleOCR -> [x_min, y_min, x_max, y_max]."""
+    try:
+        points = np.asarray(poly, dtype=float).reshape(-1, 2)
+    except (ValueError, TypeError):
+        return None
+    if points.size == 0:
+        return None
+    return [
+        float(points[:, 0].min()),
+        float(points[:, 1].min()),
+        float(points[:, 0].max()),
+        float(points[:, 1].max()),
+    ]
+
+
 @app.get("/health")
 def health():
     return {"ok": True, "provider": "PaddleOCR", "model": "PP-OCRv5"}
@@ -53,9 +69,17 @@ def ocr(request: OCRRequest, x_service_token: str | None = Header(default=None))
             res = data.get("res", data)
             texts = res.get("rec_texts", [])
             scores = res.get("rec_scores", [])
+            # Рамки нужны парсеру шильдика: значение берётся из бокса справа/снизу от метки поля.
+            polys = res.get("rec_polys", res.get("dt_polys", []))
             for i, text in enumerate(texts):
                 if str(text).strip():
-                    lines.append({"text": str(text).strip(), "confidence": float(scores[i]) if i < len(scores) else None})
+                    lines.append(
+                        {
+                            "text": str(text).strip(),
+                            "confidence": float(scores[i]) if i < len(scores) else None,
+                            "box": to_box(polys[i]) if i < len(polys) else None,
+                        }
+                    )
         return {"lines": lines, "provider": "PaddleOCR", "model": "PP-OCRv5"}
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"OCR failed: {exc}") from exc
