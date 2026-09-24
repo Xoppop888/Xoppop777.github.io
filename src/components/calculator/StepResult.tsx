@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
-import { Save, FileDown, RotateCcw, TrendingUp, CheckCircle2 } from "lucide-react";
+import { Save, FileDown, RotateCcw, TrendingUp, CheckCircle2, AlertTriangle } from "lucide-react";
 import type { CalculationInput, AppUser } from "../../lib/types";
 import type { FullCalculation } from "../../lib/engine/customsEngine";
 import { D, fmtRub, fmtCny, fmtRate, fmtDateTime } from "../../lib/money";
 import { Button, Badge, Switch } from "../ui";
 import PdfButton from "../PdfButton";
-import { ENGINE_LABELS } from "../../lib/types";
+import { ENGINE_LABELS, productionLabel } from "../../lib/types";
 
 const COLORS = ["#F2AE3C", "#E8574B", "#5AA9E6", "#37C987", "#D9932A", "#8B95A9"];
 
@@ -103,6 +103,13 @@ export default function StepResult({
               <span className="text-[11.5px] text-ink-400 font-medium">{fmtDateTime(new Date().toISOString())}</span>
             </div>
 
+            {b.age_assumed && (
+              <div className="flex items-start gap-2.5 rounded-xl border border-gold-700/40 bg-gold-900/20 p-3.5 mt-4">
+                <AlertTriangle size={16} className="text-gold-400 shrink-0 mt-0.5" />
+                <p className="text-[12.5px] text-gold-300 font-semibold leading-snug">{b.age_note}</p>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3 mt-7">
               <div className="rounded-xl border border-ink-700 bg-ink-800/60 p-3.5">
                 <p className="text-[11px] font-bold uppercase tracking-wider text-ink-400">Цена в Китае</p>
@@ -139,10 +146,10 @@ export default function StepResult({
               </p>
               <p className="text-[13px] text-ink-300 font-medium mt-1.5">
                 {[
-                  car.production_year ? String(car.production_year) : null,
+                  productionLabel(car),
                   car.engine_volume_cc ? `${(car.engine_volume_cc / 1000).toFixed(1)} л` : null,
                   car.power_hp ? `${car.power_hp} л.с.` : null,
-                  ENGINE_LABELS[car.engine_type],
+                  car.engine_type ? ENGINE_LABELS[car.engine_type] : null,
                 ]
                   .filter(Boolean)
                   .join(" • ")}

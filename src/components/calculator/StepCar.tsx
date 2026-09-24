@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { Upload, Camera, ScanLine, Trash2, RefreshCw, ShieldCheck, AlertTriangle, ImagePlus } from "lucide-react";
 import { logError } from "../../lib/logger";
 import type { CarData, OcrConfidence, OcrResult } from "../../lib/types";
-import { emptyCar, ENGINE_LABELS, DRIVE_LABELS, VEHICLE_LABELS, IMPORTER_LABELS } from "../../lib/types";
+import { emptyCar, ENGINE_LABELS, DRIVE_LABELS, VEHICLE_LABELS, IMPORTER_LABELS, MONTH_LABELS } from "../../lib/types";
 import { getRecognitionProvider } from "../../lib/providers/recognition";
 import { compressImage } from "../../lib/db";
 import { Button, Field, SelectInput, TextInput, Badge, useToast } from "../ui";
@@ -73,9 +73,11 @@ export default function StepCar({
   const warn = (key: keyof OcrConfidence): string | undefined => {
     if (!confidence) return undefined;
     const val = confidence[key];
-    const filled =
-      key === "brand" ? car.brand : key === "model" ? car.model : car[key] !== null && car[key] !== undefined;
-    return val > 0 && val < CONFIDENCE_THRESHOLD && filled ? "Проверьте значение" : undefined;
+    const value = car[key];
+    const filled = value !== null && value !== undefined && value !== "";
+    if (!filled) return "Не распознано — заполните вручную";
+    if (val > 0 && val < CONFIDENCE_THRESHOLD) return `Проверьте значение (уверенность ${(val * 100).toFixed(0)}%)`;
+    return undefined;
   };
 
   const showConfidence = confidence !== null;
@@ -129,7 +131,7 @@ export default function StepCar({
                 variant="danger"
                 onClick={() => {
                   onImage(null);
-                  onRecognized({ data: emptyCar(), confidence: { brand: 0, model: 0, production_year: 0, engine_volume_cc: 0, power_hp: 0, engine_type: 0.9 }, demo: false });
+                  onRecognized({ data: emptyCar(), confidence: { brand: 0, model: 0, production_year: 0, production_month: 0, engine_volume_cc: 0, power_hp: 0, engine_type: 0 }, demo: false });
                 }}
               >
                 <Trash2 size={14} />
@@ -171,13 +173,18 @@ export default function StepCar({
                   model: "X5",
                   modification: "xDrive40i",
                   production_year: 2024,
+                  production_month: 3,
                   engine_volume_cc: 2998,
                   power_hp: 340,
                   power_kw: 250,
+                  engine_type: "petrol",
+                  fuel_type: "АИ-95",
+                  transmission: "Автомат",
+                  drive_type: "awd",
                 });
                 onRecognized({
                   data: emptyCar(),
-                  confidence: { brand: 0.97, model: 0.94, production_year: 0.9, engine_volume_cc: 0.88, power_hp: 0.92, engine_type: 0.9 },
+                  confidence: { brand: 0.97, model: 0.94, production_year: 0.9, production_month: 0.85, engine_volume_cc: 0.88, power_hp: 0.92, engine_type: 0.9 },
                   demo: true,
                 });
                 toast("info", "Заполнен пример: BMW X5 xDrive40i");
@@ -232,6 +239,22 @@ export default function StepCar({
               warning={!!warn("production_year")}
             />
           </Field>
+          <Field
+            label="Месяц изготовления"
+            warning={warn("production_month")}
+            hint={
+              car.production_month
+                ? "Указан на шильдике рядом с годом"
+                : "Без месяца расчёт идёт по более дорогой возрастной категории"
+            }
+          >
+            <SelectInput
+              value={car.production_month ? String(car.production_month) : null}
+              onChange={(v) => set({ production_month: v ? parseInt(v, 10) : null })}
+              placeholder="Не указан на шильдике"
+              options={Object.entries(MONTH_LABELS).map(([value, label]) => ({ value, label }))}
+            />
+          </Field>
           <Field label="VIN" className="sm:col-span-2">
             <TextInput value={car.vin} onChange={(v) => set({ vin: v.toUpperCase().slice(0, 17) })} placeholder="WBAJB0C51KB123456" maxLength={17} />
           </Field>
@@ -267,13 +290,21 @@ export default function StepCar({
           <Field label="Тип двигателя" warning={warn("engine_type")} hint="От этого зависит формула расчета пошлины и утильсбора — проверяйте особенно внимательно у гибридов">
             <SelectInput
               value={car.engine_type}
-              onChange={(v) => set({ engine_type: v as CarData["engine_type"], vehicle_type: v === "electric" ? "electric" : car.vehicle_type === "electric" ? "passenger" : car.vehicle_type })}
+              placeholder="Выберите тип двигателя"
+              warning={!car.engine_type || !!warn("engine_type")}
+              onChange={(v) =>
+                set({
+                  engine_type: (v || null) as CarData["engine_type"],
+                  vehicle_type: v === "electric" ? "electric" : car.vehicle_type === "electric" ? "passenger" : car.vehicle_type,
+                })
+              }
               options={Object.entries(ENGINE_LABELS).map(([value, label]) => ({ value, label }))}
             />
           </Field>
           <Field label="Тип топлива">
             <SelectInput
               value={car.fuel_type}
+              placeholder="Не указан"
               onChange={(v) => set({ fuel_type: v })}
               options={["АИ-92", "АИ-95", "АИ-98", "Дизель", "Электро", "АИ-95 + электро", "Газ"].map((f) => ({ value: f, label: f }))}
             />
@@ -284,13 +315,15 @@ export default function StepCar({
           <Field label="Привод">
             <SelectInput
               value={car.drive_type}
-              onChange={(v) => set({ drive_type: v as CarData["drive_type"] })}
+              placeholder="Не указан"
+              onChange={(v) => set({ drive_type: (v || null) as CarData["drive_type"] })}
               options={Object.entries(DRIVE_LABELS).map(([value, label]) => ({ value, label }))}
             />
           </Field>
           <Field label="Коробка передач">
             <SelectInput
               value={car.transmission}
+              placeholder="Не указана"
               onChange={(v) => set({ transmission: v })}
               options={["Автомат", "Робот", "Вариатор", "Механика"].map((t) => ({ value: t, label: t }))}
             />

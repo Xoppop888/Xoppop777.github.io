@@ -5,7 +5,7 @@ import { FileDown } from "lucide-react";
 import type { CalculationInput } from "../lib/types";
 import type { FullCalculation } from "../lib/engine/customsEngine";
 import { D, fmtRub, fmtRub2, fmtCny, fmtRate, fmtDate, fmtDateTime } from "../lib/money";
-import { ENGINE_LABELS, DRIVE_LABELS, VEHICLE_LABELS, IMPORTER_LABELS } from "../lib/types";
+import { ENGINE_LABELS, DRIVE_LABELS, VEHICLE_LABELS, IMPORTER_LABELS, productionLabel } from "../lib/types";
 import { useToast } from "./ui";
 
 const P = "#101319";
@@ -108,7 +108,7 @@ export default function PdfButton({ input, result }: { input: CalculationInput; 
               </div>
               <div style={{ fontSize: 12, color: M, fontWeight: 600, marginTop: 6 }}>
                 {[
-                  car.production_year ? `${car.production_year} г.` : null,
+                  productionLabel(car),
                   car.engine_volume_cc ? `${car.engine_volume_cc} см³` : null,
                   car.power_hp ? `${car.power_hp} л.с.` : null,
                   car.power_kw ? `${car.power_kw} кВт` : null,
@@ -118,9 +118,11 @@ export default function PdfButton({ input, result }: { input: CalculationInput; 
                 <tbody>
                   {[
                     ["VIN", car.vin || "—"],
-                    ["Тип двигателя", ENGINE_LABELS[car.engine_type]],
+                    ["Дата изготовления (шильдик)", productionLabel(car)],
+                    ["Возраст для расчёта", b.vehicle_age_years === undefined ? "—" : `${b.vehicle_age_years} лет${b.age_assumed ? " (допущение)" : ""}`],
+                    ["Тип двигателя", car.engine_type ? ENGINE_LABELS[car.engine_type] : "—"],
                     ["Топливо", car.fuel_type || "—"],
-                    ["Привод / КПП", `${DRIVE_LABELS[car.drive_type]} / ${car.transmission}`],
+                    ["Привод / КПП", `${car.drive_type ? DRIVE_LABELS[car.drive_type] : "—"} / ${car.transmission || "—"}`],
                     ["Тип ТС", VEHICLE_LABELS[car.vehicle_type]],
                     ["Импортер", IMPORTER_LABELS[car.importer_type]],
                   ].map(([k, v]) => (
@@ -133,6 +135,13 @@ export default function PdfButton({ input, result }: { input: CalculationInput; 
               </table>
             </div>
           </div>
+
+          {b.age_assumed && (
+            <div style={{ marginTop: 16, border: `1.5px solid ${GOLD}`, background: "#fff7e8", borderRadius: 10, padding: "12px 16px" }}>
+              <div style={{ fontSize: 10.5, fontWeight: 800, color: GOLD, letterSpacing: 1.2, textTransform: "uppercase" }}>Допущение по возрасту автомобиля</div>
+              <div style={{ fontSize: 11.5, fontWeight: 600, marginTop: 4, lineHeight: 1.5 }}>{b.age_note}</div>
+            </div>
+          )}
 
           {/* курсы */}
           <div style={{ display: "flex", gap: 14, marginTop: 20 }}>

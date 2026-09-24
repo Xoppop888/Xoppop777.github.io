@@ -23,6 +23,7 @@ interface RawOcr {
   modification?: string;
   vin?: string;
   production_year?: number | null;
+  production_month?: number | null;
   engine_volume_cc?: number | null;
   power_hp?: number | null;
   power_kw?: number | null;
@@ -31,7 +32,7 @@ interface RawOcr {
   eco_class?: string;
   transmission?: string;
   drive_type?: string;
-  confidence?: Partial<Record<"brand" | "model" | "production_year" | "engine_volume_cc" | "power_hp" | "engine_type", number>>;
+  confidence?: Partial<Record<"brand" | "model" | "production_year" | "production_month" | "engine_volume_cc" | "power_hp" | "engine_type", number>>;
 }
 
 const normalize = (raw: RawOcr, demo: boolean, meta?: Partial<OcrResult>): OcrResult => {
@@ -42,17 +43,21 @@ const normalize = (raw: RawOcr, demo: boolean, meta?: Partial<OcrResult>): OcrRe
     modification: raw.modification ?? "",
     vin: raw.vin ?? "",
     production_year: raw.production_year ?? null,
+    production_month: raw.production_month ?? null,
     engine_volume_cc: raw.engine_volume_cc ?? null,
     power_hp: raw.power_hp ?? null,
     power_kw: raw.power_kw ?? null,
-    fuel_type: raw.fuel_type ?? "АИ-95",
+    fuel_type: raw.fuel_type ?? "",
     eco_class: raw.eco_class ?? "",
+    // Ничего не достаём из воздуха: нераспознанные поля остаются пустыми
+    // и требуют выбора пользователя — от них зависят формулы таможенных платежей.
     engine_type:
-      raw.engine_type === "electric" || raw.engine_type === "diesel" || raw.engine_type === "hybrid" || raw.engine_type === "phev"
+      raw.engine_type === "electric" || raw.engine_type === "diesel" || raw.engine_type === "hybrid" ||
+      raw.engine_type === "phev" || raw.engine_type === "petrol"
         ? raw.engine_type
-        : "petrol",
-    transmission: raw.transmission ?? "Автомат",
-    drive_type: raw.drive_type === "fwd" || raw.drive_type === "rwd" ? raw.drive_type : "awd",
+        : null,
+    transmission: raw.transmission ?? "",
+    drive_type: raw.drive_type === "fwd" || raw.drive_type === "rwd" || raw.drive_type === "awd" ? raw.drive_type : null,
   };
   return {
     data: car,
@@ -60,6 +65,7 @@ const normalize = (raw: RawOcr, demo: boolean, meta?: Partial<OcrResult>): OcrRe
       brand: raw.confidence?.brand ?? 0,
       model: raw.confidence?.model ?? 0,
       production_year: raw.confidence?.production_year ?? 0,
+      production_month: raw.confidence?.production_month ?? 0,
       engine_volume_cc: raw.confidence?.engine_volume_cc ?? 0,
       power_hp: raw.confidence?.power_hp ?? 0,
       engine_type: raw.confidence?.engine_type ?? 0,
@@ -120,33 +126,33 @@ export class EdgeCarRecognitionProvider implements CarRecognitionProvider {
 const SAMPLES: RawOcr[] = [
   {
     brand: "BMW", model: "X5", modification: "xDrive40i", vin: "WBAJB0C51KB123456",
-    production_year: 2024, engine_volume_cc: 2998, power_hp: 340, power_kw: 250,
+    production_year: 2024, production_month: 3, engine_volume_cc: 2998, power_hp: 340, power_kw: 250,
     fuel_type: "АИ-95", engine_type: "petrol", eco_class: "Евро-6", transmission: "Автомат", drive_type: "awd",
-    confidence: { brand: 0.97, model: 0.94, production_year: 0.9, engine_volume_cc: 0.88, power_hp: 0.92, engine_type: 0.9 },
+    confidence: { brand: 0.97, model: 0.94, production_year: 0.9, production_month: 0.86, engine_volume_cc: 0.88, power_hp: 0.92, engine_type: 0.9 },
   },
   {
     brand: "Zeekr", model: "001", modification: "Premium", vin: "LZT3C0E5XPA098765",
-    production_year: 2024, engine_volume_cc: null, power_hp: 421, power_kw: 310,
+    production_year: 2024, production_month: null, engine_volume_cc: null, power_hp: 421, power_kw: 310,
     fuel_type: "Электро", engine_type: "electric", transmission: "Автомат", drive_type: "awd",
-    confidence: { brand: 0.93, model: 0.9, production_year: 0.62, engine_volume_cc: 0, power_hp: 0.85, engine_type: 0.9 },
+    confidence: { brand: 0.93, model: 0.9, production_year: 0.62, production_month: 0, engine_volume_cc: 0, power_hp: 0.85, engine_type: 0.9 },
   },
   {
     brand: "Li Auto", model: "L7", modification: "Pro", vin: "LA6T4E8C2S1234567",
-    production_year: 2023, engine_volume_cc: 1496, power_hp: 449, power_kw: 330,
+    production_year: 2023, production_month: 11, engine_volume_cc: 1496, power_hp: 449, power_kw: 330,
     fuel_type: "АИ-95 + электро", engine_type: "phev", transmission: "Автомат", drive_type: "awd",
-    confidence: { brand: 0.89, model: 0.86, production_year: 0.91, engine_volume_cc: 0.58, power_hp: 0.79, engine_type: 0.9 },
+    confidence: { brand: 0.89, model: 0.86, production_year: 0.91, production_month: 0.88, engine_volume_cc: 0.58, power_hp: 0.79, engine_type: 0.9 },
   },
   {
     brand: "Geely", model: "Monjaro", modification: "2.0 TD", vin: "LGG5D2A79P0456789",
-    production_year: 2023, engine_volume_cc: 1969, power_hp: 238, power_kw: 175,
+    production_year: 2023, production_month: 6, engine_volume_cc: 1969, power_hp: 238, power_kw: 175,
     fuel_type: "АИ-95", engine_type: "petrol", transmission: "Автомат", drive_type: "awd",
-    confidence: { brand: 0.95, model: 0.92, production_year: 0.88, engine_volume_cc: 0.9, power_hp: 0.66, engine_type: 0.9 },
+    confidence: { brand: 0.95, model: 0.92, production_year: 0.88, production_month: 0.8, engine_volume_cc: 0.9, power_hp: 0.66, engine_type: 0.9 },
   },
   {
     brand: "Toyota", model: "Camry", modification: "2.5 AT", vin: "JTNBE46K273012345",
-    production_year: 2022, engine_volume_cc: 2487, power_hp: 209, power_kw: 154,
+    production_year: 2022, production_month: 9, engine_volume_cc: 2487, power_hp: 209, power_kw: 154,
     fuel_type: "АИ-95", engine_type: "petrol", transmission: "Автомат", drive_type: "fwd",
-    confidence: { brand: 0.98, model: 0.96, production_year: 0.55, engine_volume_cc: 0.93, power_hp: 0.9, engine_type: 0.9 },
+    confidence: { brand: 0.98, model: 0.96, production_year: 0.55, production_month: 0.5, engine_volume_cc: 0.93, power_hp: 0.9, engine_type: 0.9 },
   },
 ];
 

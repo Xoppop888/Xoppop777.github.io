@@ -111,13 +111,18 @@ export function SelectInput({
   value,
   onChange,
   options,
+  placeholder,
+  warning,
 }: {
-  value: string;
+  value: string | null;
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
+  placeholder?: string;
+  warning?: boolean;
 }) {
   return (
-    <select className={`${inputCls()} cursor-pointer appearance-none`} value={value} onChange={(e) => onChange(e.target.value)}>
+    <select className={`${inputCls(warning)} cursor-pointer appearance-none`} value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
+      {placeholder !== undefined && <option value="">{placeholder}</option>}
       {options.map((o) => (
         <option key={o.value} value={o.value}>
           {o.label}
