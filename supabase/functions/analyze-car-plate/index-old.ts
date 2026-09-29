@@ -137,43 +137,9 @@ OCR-текст (может содержать ошибки): ${ocrText || "не�
 Марка и модель — автомобиль, не название AI-модели. Для китайских полей используй транслитерацию. Не придумывай отсутствующие значения. Если одновременно есть 发动机/排量 и батарея/驱动电机 — hybrid или phev; только батарея без ДВС — electric.`;
 }
 
-function contentToText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content.map((part) => {
-      if (typeof part === "string") return part;
-      if (part && typeof part === "object") {
-        const item = part as Record<string, unknown>;
-        return typeof item.text === "string" ? item.text : typeof item.content === "string" ? item.content : "";
-      }
-      return "";
-    }).filter(Boolean).join("\n");
-  }
-  if (content && typeof content === "object") {
-    const item = content as Record<string, unknown>;
-    return contentToText(item.text ?? item.content ?? item.reasoning ?? "");
-  }
-  return "";
-}
-
-function extractJson(value: unknown): any | null {
-  let textValue = contentToText(value)
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/<analysis>[\s\S]*?<\/analysis>/gi, "")
-    .trim();
-
-  textValue = textValue
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
-
-  try { return JSON.parse(textValue); } catch { /* JSON may be surrounded by prose */ }
-
-  const start = textValue.indexOf("{");
-  const end = textValue.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  try { return JSON.parse(textValue.slice(start, end + 1)); } catch { return null; }
+function extractJson(textValue: string): any | null {
+  const cleaned = textValue.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
+  try { return JSON.parse(cleaned); } catch { const m = cleaned.match(/\{[\s\S]*\}/); try { return m ? JSON.parse(m[0]) : null; } catch { return null; } }
 }
 
 async function callOpenRouter(image: string, ocrText: string): Promise<{ parsed: OcrResponse; provider: Provider; model: string }> {
@@ -185,28 +151,13 @@ async function callOpenRouter(image: string, ocrText: string): Promise<{ parsed:
       const res = await fetchTimeout("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { ...jsonHeaders, Authorization: `Bearer ${OPENROUTER_KEY}`, "HTTP-Referer": "https://autochina-calculator.local", "X-Title": "Auto China Calculator" },
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "user", content: [{ type: "text", text: buildPrompt(ocrText) }, { type: "image_url", image_url: { url: image } }] }],
-          temperature: 0,
-          max_tokens: 800,
-          response_format: { type: "json_object" },
-        }),
+        body: JSON.stringify({ model, messages: [{ role: "user", content: [{ type: "text", text: buildPrompt(ocrText) }, { type: "image_url", image_url: { url: image } }] }], temperature: 0, max_tokens: 800 }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) { last = { code: `OPENROUTER_HTTP_${res.status}`, userMessage: payload?.error?.message || `OpenRouter HTTP ${res.status}` }; continue; }
-      const message = payload?.choices?.[0]?.message;
-      // Некоторые reasoning-модели возвращают content="", а JSON кладут в reasoning.
-      // Оператор ?? не помогает для пустой строки, поэтому объединяем оба поля.
-      const output = [message?.content, message?.reasoning]
-        .map((value) => contentToText(value))
-        .filter(Boolean)
-        .join("\n");
-      const parsed = extractJson(output);
-      if (!parsed || typeof parsed !== "object") {
-        last = { code: "OPENROUTER_INVALID_JSON", userMessage: `OpenRouter не вернул JSON (model=${model}, finish_reason=${payload?.choices?.[0]?.finish_reason ?? "unknown"})` };
-        continue;
-      }
+      const output = payload?.choices?.[0]?.message?.content;
+      const parsed = extractJson(typeof output === "string" ? output : "");
+      if (!parsed) { last = { code: "OPENROUTER_INVALID_JSON", userMessage: "OpenRouter вернул некорректный JSON" }; continue; }
       return { parsed: normalize(parsed), provider: "OpenRouter", model };
     } catch (e) { last = e; }
   }
@@ -214,11 +165,9 @@ async function callOpenRouter(image: string, ocrText: string): Promise<{ parsed:
 }
 
 function needsFallback(result: OcrResponse): boolean {
-  // Не сравниваем эвристические confidence PaddleOCR с порогом: для brand/model
-  // они намеренно занижены и не отражают фактическую полноту распознавания.
-  const hasBrandModel = Boolean(result.brand && result.model);
-  const hasIdentifier = Boolean(result.vin || result.production_year || result.engine_volume_cc);
-  return !hasBrandModel || !hasIdentifier;
+  const c = result.confidence;
+  return !result.brand || !result.model || (!result.vin && !result.production_year && !result.engine_volume_cc) ||
+    [c.brand, c.model, c.production_year, c.engine_volume_cc, c.power_hp, c.engine_type].some((x) => x > 0 && x < 0.7);
 }
 
 Deno.serve(async (req) => {
